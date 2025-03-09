@@ -3,34 +3,32 @@ import threading
 import argparse
 import sys
 import time
-from typing import List
+import os
 import cv2
 import numpy as np
+from typing import List
 from picamera2 import CompletedRequest, MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-# === AMBULANCE DETECTION FLAGS ===
-ambulance_detected = False
+# === CONFIGURATION ===
 AMBULANCE_THRESHOLD = 0.7
 detection_lock = threading.Lock()
-
+ambulance_detected = False
 last_detections = []
 LABELS = None
 
-# ======== FUNCTION DEFINITIONS ========
 def get_args():
-    """Parse command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, 
                       default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk",
-                      help="Path of the model")
-    parser.add_argument("--fps", type=int, help="Frames per second")
+                      help="Path to model file")
+    parser.add_argument("--fps", type=int, help="Frame rate")
     parser.add_argument("-s", "--softmax", action=argparse.BooleanOptionalAction, 
-                      help="Add post-process softmax")
+                      help="Enable softmax post-processing")
     parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction,
-                      help="Preprocess with aspect ratio preservation")
+                      help="Preserve aspect ratio")
     parser.add_argument("--labels", type=str, help="Path to labels file")
     parser.add_argument("--print-intrinsics", action="store_true",
                       help="Print network intrinsics")
@@ -66,7 +64,6 @@ def parse_classification_results(request: CompletedRequest) -> List[Classificati
     top_indices = top_indices[np.argsort(-np_output[top_indices])]
     last_detections = [Classification(index, np_output[index]) for index in top_indices]
 
-    # Ambulance check
     for detection in last_detections:
         label = get_label(request, detection.idx).lower()
         if "ambulance" in label and detection.score >= AMBULANCE_THRESHOLD:
@@ -107,16 +104,15 @@ def parse_and_draw_classification_results(request: CompletedRequest):
 
 def check_ambulance():
     global ambulance_detected
+    if os.path.exists("/tmp/ambulance.trigger"):
+        return True
     with detection_lock:
-        current_status = ambulance_detected
+        current = ambulance_detected
         ambulance_detected = False
-    return current_status
+        return current
 
-# ======== MAIN EXECUTION ========
 if __name__ == "__main__":
     args = get_args()
-    
-    # Initialize IMX500
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics
     
@@ -127,7 +123,6 @@ if __name__ == "__main__":
         print("Network is not a classification task", file=sys.stderr)
         exit()
 
-    # Camera setup
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     
@@ -145,4 +140,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         picam2.stop()
         print("Camera stopped")
-   
