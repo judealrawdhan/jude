@@ -13,13 +13,13 @@ from picamera2.devices.imx500.postprocess import softmax
 
 # === AMBULANCE DETECTION FLAGS ===
 ambulance_detected = False
-AMBULANCE_THRESHOLD = 0.7
+AMBULANCE_THRESHOLD = 0.7  # 70% confidence
 detection_lock = threading.Lock()
 
 last_detections = []
 LABELS = None
 
-# ========== FUNCTION DEFINITIONS ==========
+# ========== CORE FUNCTIONS ==========
 def get_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
@@ -78,8 +78,29 @@ def parse_classification_results(request: CompletedRequest) -> List[Classificati
 def draw_classification_results(request: CompletedRequest, results: List[Classification], stream: str = "main"):
     """Draw classification results on frame"""
     with MappedArray(request, stream) as m:
-        # Add your drawing implementation here
-        pass
+        if intrinsics.preserve_aspect_ratio:
+            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
+            color = (255, 0, 0)
+            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), (255, 0, 0, 0))
+            text_left, text_top = b_x, b_y + 20
+        else:
+            text_left, text_top = 0, 0
+        
+        for index, result in enumerate(results):
+            label = get_label(request, result.idx)
+            text = f"{label}: {result.score:.3f}"
+            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = text_left + 5
+            text_y = text_top + 15 + index * 20
+            overlay = m.array.copy()
+            cv2.rectangle(overlay, (text_x, text_y - text_height),
+                          (text_x + text_width, text_y + baseline),
+                          (255, 255, 255), cv2.FILLED)
+            alpha = 0.3
+            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
+            cv2.putText(m.array, text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
 def parse_and_draw_classification_results(request: CompletedRequest):
     results = parse_classification_results(request)
@@ -107,15 +128,20 @@ if __name__ == "__main__":
         print("Network is not a classification task", file=sys.stderr)
         exit()
 
-    # Rest of initialization code
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     
     imx500.show_network_fw_progress_bar()
     picam2.start(config, show_preview=True)
+    
     if intrinsics.preserve_aspect_ratio:
         imx500.set_auto_aspect_ratio()
+    
     picam2.pre_callback = parse_and_draw_classification_results
     
-    while True:
-        time.sleep(0.1)
+    try:
+        while True:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        picam2.stop()
+        print("Camera stopped")
