@@ -13,13 +13,13 @@ from picamera2.devices.imx500.postprocess import softmax
 
 # === AMBULANCE DETECTION FLAGS ===
 ambulance_detected = False
-AMBULANCE_THRESHOLD = 0.7  # 70% confidence
+AMBULANCE_THRESHOLD = 0.7
 detection_lock = threading.Lock()
 
 last_detections = []
 LABELS = None
 
-# ========== CORE FUNCTIONS ==========
+# ======== FUNCTION DEFINITIONS ========
 def get_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
@@ -48,7 +48,7 @@ def get_label(request: CompletedRequest, idx: int) -> str:
         assert len(LABELS) in [1000, 1001], "Invalid labels file"
         output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
         if output_tensor_size == 1000:
-            LABELS = LABELS[1:]  # Remove background label
+            LABELS = LABELS[1:]
     return LABELS[idx]
 
 def parse_classification_results(request: CompletedRequest) -> List[Classification]:
@@ -76,7 +76,6 @@ def parse_classification_results(request: CompletedRequest) -> List[Classificati
     return last_detections
 
 def draw_classification_results(request: CompletedRequest, results: List[Classification], stream: str = "main"):
-    """Draw classification results on frame"""
     with MappedArray(request, stream) as m:
         if intrinsics.preserve_aspect_ratio:
             b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
@@ -113,11 +112,11 @@ def check_ambulance():
         ambulance_detected = False
     return current_status
 
-# ========== MAIN EXECUTION ==========
+# ======== MAIN EXECUTION ========
 if __name__ == "__main__":
     args = get_args()
     
-    # Initialize IMX500 and intrinsics
+    # Initialize IMX500
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics
     
@@ -128,6 +127,7 @@ if __name__ == "__main__":
         print("Network is not a classification task", file=sys.stderr)
         exit()
 
+    # Camera setup
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     
@@ -145,3 +145,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         picam2.stop()
         print("Camera stopped")
+   
