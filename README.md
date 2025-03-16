@@ -1,162 +1,113 @@
-#!/usr/bin/env python3
-import threading
-import time
 import RPi.GPIO as GPIO
-from picamera2 import Picamera2
-from picamera2.devices import IMX500
+import time
+import cv2
 import numpy as np
-import os
+from picamera2 import CompletedRequest, MappedArray, Picamera2
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
 
-# ====== CONFIGURATION ======
-PINS = {'red': 17, 'yellow': 27, 'green': 22}
-FIRMWARE_PATH = "/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk"
-DETECTION_THRESHOLD = 0.7  # 70% confidence
+# Traffic Light GPIO Setup
+RED_PIN = 17
+YELLOW_PIN = 27
+GREEN_PIN = 22
 
-# ====== SHARED STATE ======
-ambulance_detected = False
-system_lock = threading.Lock()
-
-# ====== GPIO INITIALIZATION ======
 GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)
+GPIO.setup(RED_PIN, GPIO.OUT)
+GPIO.setup(YELLOW_PIN, GPIO.OUT)
+GPIO.setup(GREEN_PIN, GPIO.OUT)
 
-# ====== CAMERA FUNCTIONS ======
-def initialize_camera():
-    """Initialize IMX500 camera and Picamera2."""
-    if not os.path.exists(FIRMWARE_PATH):
-        print(f"âŒ Missing firmware: {FIRMWARE_PATH}")
-        print("Install with: sudo apt install imx500-firmware")
-        return None, None
-    
-    try:
-        print("ðŸ”„ Initializing IMX500 camera...")
-        imx500 = IMX500(FIRMWARE_PATH)
-        picam2 = Picamera2(imx500.camera_num)
-        config = picam2.create_preview_configuration()
-        picam2.configure(config)
-        print("âœ… Camera successfully initialized!")
-        return imx500, picam2
-    except Exception as e:
-        print(f"âŒ Camera error: {str(e)}")
-        return None, None
+# Function to control traffic lights
+def traffic_light_sequence():
+    print("🚦 Red Light ON for 30 sec")
+    GPIO.output(RED_PIN, GPIO.HIGH)
+    GPIO.output(YELLOW_PIN, GPIO.LOW)
+    GPIO.output(GREEN_PIN, GPIO.LOW)
+    time.sleep(30)
 
-def detect_ambulance(imx500, picam2):
-    """Continuously capture frames and check for ambulance detection."""
-    global ambulance_detected
-    print("ðŸš€ Starting IMX500 AI detection...")
+    print("🚦 Yellow Light ON for 3 sec")
+    GPIO.output(RED_PIN, GPIO.LOW)
+    GPIO.output(YELLOW_PIN, GPIO.HIGH)
+    GPIO.output(GREEN_PIN, GPIO.LOW)
+    time.sleep(3)
 
-    try:
-        picam2.start()
-        print("âœ… Camera started successfully")
+    print("🚦 Green Light ON for 15 sec")
+    GPIO.output(RED_PIN, GPIO.LOW)
+    GPIO.output(YELLOW_PIN, GPIO.LOW)
+    GPIO.output(GREEN_PIN, GPIO.HIGH)
+    time.sleep(15)
 
-        while True:
-            print("ðŸ“¸ Capturing frame...")
-            request = picam2.capture_request()
+    # Reset to red after cycle
+    GPIO.output(RED_PIN, GPIO.HIGH)
+    GPIO.output(YELLOW_PIN, GPIO.LOW)
+    GPIO.output(GREEN_PIN, GPIO.LOW)
 
-            if not request:
-                print("âŒ Failed to capture request")
-                time.sleep(0.1)
-                continue  # Skip and try again
+# Classification Variables
+last_detections = []
+LABELS = None
 
-            outputs = imx500.get_outputs(request.get_metadata())
+class Classification:
+    def __init__(self, idx: int, score: float):
+        self.idx = idx
+        self.score = score
 
-            if outputs:
-                print("ðŸ” Model processed the frame")
-                output = outputs[0]
-                top_indices = np.argpartition(-output, 3)[:3]
+def get_label(request: CompletedRequest, idx: int) -> str:
+    global LABELS
+    if LABELS is None:
+        LABELS = intrinsics.labels
+        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
+        output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
+        if output_tensor_size == 1000:
+            LABELS = LABELS[1:]
+    return LABELS[idx]
 
-                for idx in top_indices:
-                    label = imx500.network_intrinsics.labels[idx].lower()
-                    confidence = output[idx]
-                    print(f"ðŸ›‘ Detected: {label} ({confidence:.2f})")
+def parse_classification_results(request: CompletedRequest):
+    global last_detections
+    np_outputs = imx500.get_outputs(request.get_metadata())
+    if np_outputs is None:
+        return last_detections
+    np_output = np_outputs[0]
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+    top_indices = np.argpartition(-np_output, 3)[:3]
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]
+    last_detections = [Classification(index, np_output[index]) for index in top_indices]
+    return last_detections
 
-                    if "ambulance" in label and confidence > DETECTION_THRESHOLD:
-                        with system_lock:
-                            ambulance_detected = True
-                            print("ðŸš‘ AMBULANCE DETECTED! Prioritizing traffic light.")
+def check_for_ambulance():
+    """Check if an ambulance is detected"""
+    for detection in last_detections:
+        label = get_label(None, detection.idx)
+        if "ambulance" in label.lower():
+            print("🚑 Ambulance detected! Changing traffic lights...")
+            traffic_light_sequence()
+            return True
+    return False
 
-            else:
-                print("âš ï¸ No objects detected in this frame.")
-
-            request.release()
-            time.sleep(0.1)
-    except Exception as e:
-        print(f"âŒ Error in detect_ambulance(): {str(e)}")
-    finally:
-        picam2.stop()
-        print("ðŸ“· Camera stopped")
-
-# ====== TRAFFIC LIGHT FUNCTIONS ======
-def traffic_control():
-    """Control traffic light behavior based on ambulance detection."""
-    global ambulance_detected
-    try:
-        while True:
-            with system_lock:
-                current_state = ambulance_detected
-                ambulance_detected = False  # Reset after checking
-                
-            if current_state:
-                # Emergency sequence: Green for ambulance
-                GPIO.output(PINS['green'], GPIO.HIGH)
-                GPIO.output(PINS['yellow'], GPIO.LOW)
-                GPIO.output(PINS['red'], GPIO.LOW)
-                print("ðŸš¦ EMERGENCY MODE: GREEN LIGHT FOR AMBULANCE")
-                time.sleep(15)  # Hold green for 15 seconds
-                
-                # Transition back to normal
-                GPIO.output(PINS['green'], GPIO.LOW)
-                GPIO.output(PINS['yellow'], GPIO.HIGH)
-                time.sleep(3)
-                GPIO.output(PINS['yellow'], GPIO.LOW)
-                GPIO.output(PINS['red'], GPIO.HIGH)
-                time.sleep(15)  # Red phase before normal cycle
-            else:
-                # Normal cycle
-                GPIO.output(PINS['green'], GPIO.HIGH)
-                print("ðŸš¦ NORMAL TRAFFIC: GREEN LIGHT")
-                time.sleep(15)
-                GPIO.output(PINS['green'], GPIO.LOW)
-                
-                GPIO.output(PINS['yellow'], GPIO.HIGH)
-                print("ðŸš¦ NORMAL TRAFFIC: YELLOW LIGHT")
-                time.sleep(3)
-                GPIO.output(PINS['yellow'], GPIO.LOW)
-                
-                GPIO.output(PINS['red'], GPIO.HIGH)
-                print("ðŸš¦ NORMAL TRAFFIC: RED LIGHT")
-                time.sleep(15)
-                GPIO.output(PINS['red'], GPIO.LOW)
-                
-    except KeyboardInterrupt:
-        GPIO.cleanup()
-
-# ====== MAIN EXECUTION ======
 if __name__ == "__main__":
-    print("ðŸ”„ Starting Integrated System...")
-    
-    imx500, picam2 = initialize_camera()
-    if not imx500:
-        print("âŒ Camera initialization failed. Exiting.")
-        exit(1)
+    # Load Camera & AI Model
+    imx500 = IMX500("/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
+    intrinsics.task = "classification"
 
-    # Start threads
-    cam_thread = threading.Thread(target=detect_ambulance, args=(imx500, picam2), daemon=True)
-    traffic_thread = threading.Thread(target=traffic_control, daemon=True)
-    
-    cam_thread.start()
-    traffic_thread.start()
+    # Load Labels
+    with open("assets/imagenet_labels.txt", "r") as f:
+        intrinsics.labels = f.read().splitlines()
+    intrinsics.update_with_defaults()
+
+    # Start Camera
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
+    picam2.start(config, show_preview=True)
+
+    print("🚦 Waiting for ambulance detection...")
 
     try:
         while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nðŸ”´ Shutting down...")
-        picam2.stop()
-        GPIO.cleanup()
+            time.sleep(0.5)
+            if check_for_ambulance():
+                time.sleep(5)  # Avoid detecting the same ambulance multiple times in a row
 
-              
-    
+    except KeyboardInterrupt:
+        print("🚦 Stopping traffic light system")
+        GPIO.cleanup()
