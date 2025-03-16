@@ -11,39 +11,41 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-# GPIO Pins for Traffic Light
-RED_PIN = 17
-YELLOW_PIN = 27
-GREEN_PIN = 22
+# GPIO Pins for Traffic Light Module
+RED_PIN = 17  # R - Red
+GREEN_PIN = 22  # G - Green
+YELLOW_PIN = 27  # Y - Yellow
+GND = "GND"  # Ground (No control needed)
 
 # GPIO Setup
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RED_PIN, GPIO.OUT)
-GPIO.setup(YELLOW_PIN, GPIO.OUT)
 GPIO.setup(GREEN_PIN, GPIO.OUT)
+GPIO.setup(YELLOW_PIN, GPIO.OUT)
 
 def traffic_light_sequence():
     print("🚦 Red Light ON for 30 sec")
     GPIO.output(RED_PIN, GPIO.HIGH)
+    GPIO.output(GREEN_PIN, GPIO.LOW)
     GPIO.output(YELLOW_PIN, GPIO.LOW)
-    GPIO.output(GREEN_PIN, GPIO.LOW)
     time.sleep(30)
-
-    print("🚦 Yellow Light ON for 3 sec")
-    GPIO.output(RED_PIN, GPIO.LOW)
-    GPIO.output(YELLOW_PIN, GPIO.HIGH)
-    GPIO.output(GREEN_PIN, GPIO.LOW)
-    time.sleep(3)
 
     print("🚦 Green Light ON for 15 sec")
     GPIO.output(RED_PIN, GPIO.LOW)
-    GPIO.output(YELLOW_PIN, GPIO.LOW)
     GPIO.output(GREEN_PIN, GPIO.HIGH)
+    GPIO.output(YELLOW_PIN, GPIO.LOW)
     time.sleep(15)
 
-    GPIO.output(RED_PIN, GPIO.HIGH)
-    GPIO.output(YELLOW_PIN, GPIO.LOW)
+    print("🚦 Yellow Light ON for 3 sec")
+    GPIO.output(RED_PIN, GPIO.LOW)
     GPIO.output(GREEN_PIN, GPIO.LOW)
+    GPIO.output(YELLOW_PIN, GPIO.HIGH)
+    time.sleep(3)
+
+    # Reset to Red after cycle
+    GPIO.output(RED_PIN, GPIO.HIGH)
+    GPIO.output(GREEN_PIN, GPIO.LOW)
+    GPIO.output(YELLOW_PIN, GPIO.LOW)
 
 # Classification Variables
 last_detections = []
@@ -129,4 +131,4 @@ if __name__ == "__main__":
                 time.sleep(5)
     except KeyboardInterrupt:
         print("🚦 Stopping traffic light system")
-        GPIO.cleanup()
+        GPIO.cleanup() 
