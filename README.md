@@ -48,6 +48,7 @@ def traffic_light_sequence():
 # Classification Variables
 last_detections = []
 LABELS = None
+CONFIDENCE_THRESHOLD = 0.30
 
 class Classification:
     def __init__(self, idx: int, score: float):
@@ -77,12 +78,19 @@ def parse_classification_results(request: CompletedRequest) -> List[Classificati
     return last_detections
 
 def check_for_ambulance():
+    print("🔍 Checking detected objects...")
+    if not last_detections:
+        print("❌ No objects detected! The model may not be working properly.")
+        return False
+    
     for detection in last_detections:
         label = get_label(None, detection.idx)
-        print(f"🔍 Detected label: {label} with confidence: {detection.score}")
-        if "ambulance" in label.lower():
-            print("🚑 Ambulance detected! Changing traffic lights...")
-            os.system("aplay ambulance_alert.wav")  # Play alert sound
+        confidence = detection.score
+        print(f"✅ Detected: {label} | Confidence: {confidence:.3f}")
+        
+        if "ambulance" in label.lower() and confidence >= CONFIDENCE_THRESHOLD:
+            print("🚑 High confidence ambulance detected! Changing traffic lights...")
+            os.system("aplay ambulance_alert.wav")
             traffic_light_sequence()
             return True
     return False
