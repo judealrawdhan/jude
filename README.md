@@ -49,7 +49,7 @@ def traffic_light_sequence():
 
 # Classification Variables
 last_detections = []
-CONFIDENCE_THRESHOLD = 0.50  # Adjust confidence threshold for trucks
+CONFIDENCE_THRESHOLD = 0.20  # Lowering threshold for better detection
 
 class Detection:
     def __init__(self, coords, category, conf, metadata):
@@ -59,33 +59,16 @@ class Detection:
 
 def parse_detections(metadata: dict):
     global last_detections
-    bbox_normalization = intrinsics.bbox_normalization
-    bbox_order = intrinsics.bbox_order
-    threshold = args.threshold
-    iou = args.iou
-    max_detections = args.max_detections
     np_outputs = imx500.get_outputs(metadata, add_batch=True)
-    input_w, input_h = imx500.get_input_size()
     if np_outputs is None:
+        print("❌ Model did not return any outputs. Check if it's running correctly.")
         return last_detections
-    if intrinsics.postprocess == "nanodet":
-        boxes, scores, classes = postprocess_nanodet_detection(
-            outputs=np_outputs[0], conf=threshold, iou_thres=iou, max_out_dets=max_detections
-        )[0]
-    else:
-        boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
-        if bbox_normalization:
-            boxes = boxes / input_h
-        if bbox_order == "xy":
-            boxes = boxes[:, [1, 0, 3, 2]]
-        boxes = np.array_split(boxes, 4, axis=1)
-        boxes = zip(*boxes)
-
-    last_detections = [
-        Detection(box, category, score, metadata)
-        for box, score, category in zip(boxes, scores, classes)
-        if score > threshold
-    ]
+    last_detections = []
+    labels = get_labels()
+    print("🔍 Detected objects:")
+    for detection in last_detections:
+        label = labels[int(detection.category)]
+        print(f"✅ Label: {label} | Confidence: {detection.conf:.3f}")
     return last_detections
 
 @lru_cache
@@ -96,7 +79,6 @@ def get_labels():
     return labels
 
 def check_for_truck():
-    """Check if a truck is detected and change traffic lights."""
     print("🔍 Checking detected objects...")
     labels = get_labels()
     for detection in last_detections:
@@ -105,7 +87,7 @@ def check_for_truck():
         print(f"✅ Detected: {label} | Confidence: {confidence:.3f}")
         if "truck" in label.lower() and confidence >= CONFIDENCE_THRESHOLD:
             print("🚛 Truck detected! Changing traffic lights...")
-            os.system("aplay truck_alert.wav")  # Play alert sound if needed
+            os.system("aplay truck_alert.wav")
             traffic_light_sequence()
             return True
     return False
@@ -113,7 +95,7 @@ def check_for_truck():
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
-    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    parser.add_argument("--labels", type=str, default="/home/jude/projects/RPI_AI_Cam/picamera2/examples/hailo/coco.txt")
     parser.add_argument("--threshold", type=float, default=0.55, help="Detection threshold")
     return parser.parse_args()
 
@@ -122,12 +104,8 @@ if __name__ == "__main__":
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
     intrinsics.task = "object detection"
-    if args.labels:
-        with open(args.labels, "r") as f:
-            intrinsics.labels = f.read().splitlines()
-    else:
-        with open("/home/jude/projects/RPI_AI_Cam/picamera2/examples/imx500/imx500_object_detection_demo.py", "r") as f:
-            intrinsics.labels = f.read().splitlines()
+    with open(args.labels, "r") as f:
+        intrinsics.labels = f.read().splitlines()
     intrinsics.update_with_defaults()
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
