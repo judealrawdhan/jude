@@ -5,11 +5,11 @@ import os
 import cv2
 import numpy as np
 import RPi.GPIO as GPIO
+from functools import lru_cache
 from typing import List
-from picamera2 import CompletedRequest, MappedArray, Picamera2
+from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import NetworkIntrinsics
-from picamera2.devices.imx500.postprocess import softmax
+from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
 
 # GPIO Pins for Traffic Light Module
 RED_PIN = 17  # R - Red
@@ -49,95 +49,94 @@ def traffic_light_sequence():
 
 # Classification Variables
 last_detections = []
-LABELS = None
-CONFIDENCE_THRESHOLD = 0.10
+CONFIDENCE_THRESHOLD = 0.50  # Adjust confidence threshold for trucks
 
-class Classification:
-    def __init__(self, idx: int, score: float):
-        self.idx = idx
-        self.score = score
+class Detection:
+    def __init__(self, coords, category, conf, metadata):
+        self.category = category
+        self.conf = conf
+        self.box = imx500.convert_inference_coords(coords, metadata, picam2)
 
-def get_label(request: CompletedRequest, idx: int) -> str:
-    global LABELS
-    if LABELS is None:
-        LABELS = intrinsics.labels
-        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
-        output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
-        if output_tensor_size == 1000:
-            LABELS = LABELS[1:]
-    return LABELS[idx]
-
-def parse_classification_results(request: CompletedRequest) -> List[Classification]:
+def parse_detections(metadata: dict):
     global last_detections
-    np_outputs = imx500.get_outputs(request.get_metadata())
-
+    bbox_normalization = intrinsics.bbox_normalization
+    bbox_order = intrinsics.bbox_order
+    threshold = args.threshold
+    iou = args.iou
+    max_detections = args.max_detections
+    np_outputs = imx500.get_outputs(metadata, add_batch=True)
+    input_w, input_h = imx500.get_input_size()
     if np_outputs is None:
-        print("❌ Model did not return any outputs. Check if it's running correctly.")
         return last_detections
+    if intrinsics.postprocess == "nanodet":
+        boxes, scores, classes = postprocess_nanodet_detection(
+            outputs=np_outputs[0], conf=threshold, iou_thres=iou, max_out_dets=max_detections
+        )[0]
+    else:
+        boxes, scores, classes = np_outputs[0][0], np_outputs[1][0], np_outputs[2][0]
+        if bbox_normalization:
+            boxes = boxes / input_h
+        if bbox_order == "xy":
+            boxes = boxes[:, [1, 0, 3, 2]]
+        boxes = np.array_split(boxes, 4, axis=1)
+        boxes = zip(*boxes)
 
-    np_output = np_outputs[0]
-    if intrinsics.softmax:
-        np_output = softmax(np_output)
-    
-    top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices
-    top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort by score
-    
-    last_detections = [Classification(index, np_output[index]) for index in top_indices]
-    
-    print("🔍 Model detected the following:")
-    for detection in last_detections:
-        label = get_label(None, detection.idx)
-        print(f"✅ Label: {label} | Confidence: {detection.score:.3f}")
-    
+    last_detections = [
+        Detection(box, category, score, metadata)
+        for box, score, category in zip(boxes, scores, classes)
+        if score > threshold
+    ]
     return last_detections
 
-def check_for_ambulance():
+@lru_cache
+def get_labels():
+    labels = intrinsics.labels
+    if intrinsics.ignore_dash_labels:
+        labels = [label for label in labels if label and label != "-"]
+    return labels
+
+def check_for_truck():
+    """Check if a truck is detected and change traffic lights."""
     print("🔍 Checking detected objects...")
-    if not last_detections:
-        print("❌ No objects detected! The model may not be working properly.")
-        return False
+    labels = get_labels()
     for detection in last_detections:
-        label = get_label(None, detection.idx)
-        confidence = detection.score
+        label = labels[int(detection.category)]
+        confidence = detection.conf
         print(f"✅ Detected: {label} | Confidence: {confidence:.3f}")
-        if "ambulance" in label.lower() and confidence >= CONFIDENCE_THRESHOLD:
-            print("🚑 High confidence ambulance detected! Changing traffic lights...")
-            os.system("aplay ambulance_alert.wav")
+        if "truck" in label.lower() and confidence >= CONFIDENCE_THRESHOLD:
+            print("🚛 Truck detected! Changing traffic lights...")
+            os.system("aplay truck_alert.wav")  # Play alert sound if needed
             traffic_light_sequence()
             return True
     return False
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
     parser.add_argument("--labels", type=str, help="Path to the labels file")
+    parser.add_argument("--threshold", type=float, default=0.55, help="Detection threshold")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = get_args()
-    
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
-    intrinsics.task = "classification"
-    
+    intrinsics.task = "object detection"
     if args.labels:
         with open(args.labels, "r") as f:
             intrinsics.labels = f.read().splitlines()
     else:
-        with open("assets/imagenet_labels.txt", "r") as f:
+        with open("assets/coco_labels.txt", "r") as f:
             intrinsics.labels = f.read().splitlines()
-    
     intrinsics.update_with_defaults()
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
-    
     picam2.start(config, show_preview=True)
-    print("🚦 Waiting for ambulance detection...")
-    
+    print("🚦 Waiting for truck detection...")
     try:
         while True:
             time.sleep(0.5)
-            if check_for_ambulance():
+            if check_for_truck():
                 time.sleep(5)
     except KeyboardInterrupt:
         print("🚦 Stopping traffic light system")
