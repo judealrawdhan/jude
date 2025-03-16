@@ -1,4 +1,6 @@
-import argparse
+# Traffic Light Control with Truck Detection
+# Modified to match the structured method of Raspberry Pi IMX500 examples
+
 import sys
 import time
 import os
@@ -6,7 +8,6 @@ import cv2
 import numpy as np
 import RPi.GPIO as GPIO
 from functools import lru_cache
-from typing import List
 from picamera2 import MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
@@ -92,25 +93,23 @@ def check_for_truck():
             return True
     return False
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
-    parser.add_argument("--labels", type=str, default="/home/jude/projects/RPI_AI_Cam/picamera2/examples/hailo/coco.txt")
-    parser.add_argument("--threshold", type=float, default=0.55, help="Detection threshold")
-    return parser.parse_args()
-
 if __name__ == "__main__":
-    args = get_args()
-    imx500 = IMX500(args.model)
+    # Model and labels setup
+    MODEL_PATH = "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
+    LABELS_PATH = "/home/jude/projects/RPI_AI_Cam/picamera2/examples/hailo/coco.txt"
+
+    imx500 = IMX500(MODEL_PATH)
     intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
     intrinsics.task = "object detection"
-    with open(args.labels, "r") as f:
+    with open(LABELS_PATH, "r") as f:
         intrinsics.labels = f.read().splitlines()
     intrinsics.update_with_defaults()
+
     picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     picam2.start(config, show_preview=True)
     print("🚦 Waiting for truck detection...")
+    
     try:
         while True:
             time.sleep(0.5)
