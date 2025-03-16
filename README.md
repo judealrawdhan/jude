@@ -126,7 +126,7 @@ if __name__ == "__main__":
         with open(args.labels, "r") as f:
             intrinsics.labels = f.read().splitlines()
     else:
-        with open("/home/jude/projects/RPI_AI_Cam/picamera2/examples/imx500/assets/coco_labels.txt", "r") as f:
+        with open("/home/jude/projects/RPI_AI_Cam/picamera2/examples/imx500/imx500_object_detection_demo.py", "r") as f:
             intrinsics.labels = f.read().splitlines()
     intrinsics.update_with_defaults()
     picam2 = Picamera2(imx500.camera_num)
