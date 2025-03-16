@@ -50,7 +50,7 @@ def traffic_light_sequence():
 # Classification Variables
 last_detections = []
 LABELS = None
-CONFIDENCE_THRESHOLD = 0.15
+CONFIDENCE_THRESHOLD = 0.10
 
 class Classification:
     def __init__(self, idx: int, score: float):
@@ -70,19 +70,25 @@ def get_label(request: CompletedRequest, idx: int) -> str:
 def parse_classification_results(request: CompletedRequest) -> List[Classification]:
     global last_detections
     np_outputs = imx500.get_outputs(request.get_metadata())
+
     if np_outputs is None:
         print("❌ Model did not return any outputs. Check if it's running correctly.")
         return last_detections
+
     np_output = np_outputs[0]
     if intrinsics.softmax:
         np_output = softmax(np_output)
+    
     top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices
     top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort by score
+    
     last_detections = [Classification(index, np_output[index]) for index in top_indices]
+    
     print("🔍 Model detected the following:")
     for detection in last_detections:
         label = get_label(None, detection.idx)
         print(f"✅ Label: {label} | Confidence: {detection.score:.3f}")
+    
     return last_detections
 
 def check_for_ambulance():
