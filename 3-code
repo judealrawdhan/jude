@@ -1,0 +1,92 @@
+import argparse
+import sys
+from functools import lru_cache
+
+import cv2
+import numpy as np
+
+from picamera2 import MappedArray, Picamera2
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import (NetworkIntrinsics, postprocess_nanodet_detection)
+import RPi.GPIO as GPIO
+import time
+
+# تعريف أرقام الـ GPIO لكل لون في الإشارة
+RED_LIGHT = 17
+YELLOW_LIGHT = 27
+GREEN_LIGHT = 22
+
+# إعداد الـ GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RED_LIGHT, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT, GPIO.OUT)
+
+# تشغيل الضوء الأحمر افتراضيًا عند بدء التشغيل
+GPIO.output(RED_LIGHT, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+GPIO.output(GREEN_LIGHT, GPIO.LOW)
+
+def set_traffic_light(color):
+    GPIO.output(RED_LIGHT, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT, GPIO.LOW)
+
+    if color == "red":
+        GPIO.output(RED_LIGHT, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
+
+def turn_green_light():
+    print("🚦 تشغيل الإشارة الخضراء!")
+    set_traffic_light("green")
+    time.sleep(5)  # إبقاء الضوء الأخضر لمدة 5 ثوانٍ
+
+    print("🟡 تحويل الإشارة إلى الأصفر!")
+    set_traffic_light("yellow")
+    time.sleep(2)  # بقاء اللون الأصفر لفترة وجيزة
+
+    print("🔴 إعادة الإشارة إلى الأحمر!")
+    set_traffic_light("red")
+
+last_detections = []
+
+class Detection:
+    def __init__(self, coords, category, conf, metadata):
+        """Create a Detection object, recording the bounding box, category and confidence."""
+        self.category = category
+        self.conf = conf
+        self.box = imx500.convert_inference_coords(coords, metadata, picam2)
+
+def get_labels():
+    labels = intrinsics.labels
+    if intrinsics.ignore_dash_labels:
+        labels = [label for label in labels if label and label != "-"]
+    
+    # طباعة محتويات labels
+    print(f"الفئات المتاحة: {labels}")  # طباعة الفئات المتاحة
+
+    return labels
+
+def parse_detections(metadata: dict):
+    """Parse the output tensor into a number of detected objects, scaled to the ISP output."""
+    global last_detections
+    bbox_normalization = intrinsics.bbox_normalization
+    bbox_order = intrinsics.bbox_order
+    threshold = args.threshold
+    iou = args.iou
+    max_detections = args.max_detections
+
+    np_outputs = imx500.get_outputs(metadata, add_batch=True)
+    input_w, input_h = imx500.get_input_size()
+    if np_outputs is None:
+        return last_detections
+
+    if intrinsics.postprocess == "nanodet":
+        boxes, scores, classes = \
+            postprocess_nanodet_detection(outputs=np_outputs[0], conf=threshold, iou_thres=iou,
+                                          max_out_dets=max_detections)[0]
+        from picamera2.devices.imx500.postprocess import scale_boxes
+        boxes = scale_
