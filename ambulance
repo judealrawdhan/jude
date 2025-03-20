@@ -2,6 +2,7 @@ import argparse
 import sys
 import time
 import RPi.GPIO as GPIO
+import numpy as np  # Add this import for numpy
 from picamera2 import CompletedRequest, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
