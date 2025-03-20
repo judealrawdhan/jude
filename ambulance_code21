@@ -68,7 +68,7 @@ def get_label(request: CompletedRequest, idx: int) -> str:
     return LABELS[idx]
 
 def softmax(x):
-    """Compute softmax values for each sets of scores in x."""
+    """Compute softmax values for each set of scores in x."""
     e_x = np.exp(x - np.max(x))  # To improve numerical stability
     return e_x / e_x.sum(axis=-1, keepdims=True)
 
@@ -84,6 +84,9 @@ def parse_classification_results(request: CompletedRequest):
 
     # Apply softmax to the output
     np_output = softmax(np_output)
+
+    # Debugging output to check what is being detected
+    print(f"Model output (raw scores): {np_output}")
 
     top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
     top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
