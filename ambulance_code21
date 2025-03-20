@@ -2,11 +2,12 @@ import argparse
 import sys
 import time
 import RPi.GPIO as GPIO
-import numpy as np  # Import numpy for softmax
+import numpy as np
 import cv2
 from picamera2 import CompletedRequest, MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
 
 # GPIO Setup for Traffic Lights
 RED_LIGHT = 17
@@ -67,11 +68,6 @@ def get_label(request: CompletedRequest, idx: int) -> str:
         assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
     return LABELS[idx]
 
-def softmax(x):
-    """Compute softmax values for each set of scores in x."""
-    e_x = np.exp(x - np.max(x))  # To improve numerical stability
-    return e_x / e_x.sum(axis=-1, keepdims=True)
-
 def parse_classification_results(request: CompletedRequest):
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
@@ -85,19 +81,10 @@ def parse_classification_results(request: CompletedRequest):
     # Apply softmax to the output
     np_output = softmax(np_output)
 
-    # Debugging output to check what is being detected
-    print(f"Model output (raw scores): {np_output}")
-
     top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
     top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
 
     last_detections = [Classification(index, np_output[index]) for index in top_indices]
-
-    # Debugging output for classifications
-    print("Top 3 classifications:")
-    for result in last_detections:
-        label = get_label(request, result.idx)
-        print(f"Class: {label}, Score: {result.score}")
 
     return last_detections
 
@@ -144,7 +131,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
 
-    # Initialize the camera and network
+    # This must be called before instantiation of Picamera2
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics
     picam2 = Picamera2(imx500.camera_num)
