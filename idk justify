@@ -27,6 +27,7 @@ GPIO.output(GREEN_LIGHT, GPIO.LOW)
 
 def set_traffic_light(color):
     """Control the traffic light based on the color."""
+    print(f"Setting traffic light to: {color}")
     GPIO.output(RED_LIGHT, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT, GPIO.LOW)
     GPIO.output(GREEN_LIGHT, GPIO.LOW)
