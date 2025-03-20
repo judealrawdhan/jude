@@ -1,0 +1,109 @@
+import argparse
+import sys
+import time
+import RPi.GPIO as GPIO
+from picamera2 import CompletedRequest, Picamera2
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
+
+# Set up GPIO for traffic light control
+GPIO.setmode(GPIO.BCM)
+RED_PIN = 17  # Example GPIO pin for red light
+YELLOW_PIN = 27  # Example GPIO pin for yellow light
+GREEN_PIN = 22  # Example GPIO pin for green light
+
+# Set up the pins as output
+GPIO.setup(RED_PIN, GPIO.OUT)
+GPIO.setup(YELLOW_PIN, GPIO.OUT)
+GPIO.setup(GREEN_PIN, GPIO.OUT)
+
+last_detections = []
+LABELS = None
+
+class Classification:
+    def __init__(self, idx: int, score: float):
+        """Create a Classification object, recording the idx and score."""
+        self.idx = idx
+        self.score = score
+
+
+def get_label(request: CompletedRequest, idx: int) -> str:
+    """Retrieve the label corresponding to the classification index."""
+    global LABELS
+    if LABELS is None:
+        LABELS = intrinsics.labels
+    return LABELS[idx]
+
+
+def parse_classification_results(request: CompletedRequest):
+    """Parse the output tensor into the classification results above the threshold."""
+    global last_detections
+    np_outputs = imx500.get_outputs(request.get_metadata())
+    if np_outputs is None:
+        return last_detections
+    np_output = np_outputs[0]
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+    top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
+    last_detections = [Classification(index, np_output[index]) for index in top_indices]
+    return last_detections
+
+
+def control_traffic_light(detected: bool):
+    """Control the traffic light based on ambulance detection."""
+    if detected:
+        GPIO.output(GREEN_PIN, GPIO.HIGH)
+        GPIO.output(RED_PIN, GPIO.LOW)
+        GPIO.output(YELLOW_PIN, GPIO.LOW)
+        print("Ambulance detected! Traffic light turned green.")
+    else:
+        GPIO.output(RED_PIN, GPIO.HIGH)
+        GPIO.output(GREEN_PIN, GPIO.LOW)
+        GPIO.output(YELLOW_PIN, GPIO.LOW)
+        print("No ambulance detected. Traffic light turned red.")
+
+
+def parse_and_draw_classification_results(request: CompletedRequest):
+    """Analyse and draw the classification results in the output tensor."""
+    results = parse_classification_results(request)
+    ambulance_detected = False
+
+    # Check if "ambulance" is in the top 3 detections
+    for result in results:
+        label = get_label(request, result.idx)
+        if label == "ambulance" and result.score > 0.5:  # You can adjust the threshold score
+            ambulance_detected = True
+
+    # Control the traffic light based on ambulance detection
+    control_traffic_light(ambulance_detected)
+
+
+def get_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, help="Path of the model", default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    parser.add_argument("--fps", type=int, help="Frames per second")
+    parser.add_argument("-s", "--softmax", action=argparse.BooleanOptionalAction, help="Add post-process softmax")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction, help="preprocess the image with preserve aspect ratio")
+    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = get_args()
+
+    # This must be called before instantiation of Picamera2
+    imx500 = IMX500(args.model)
+    intrinsics = imx500.network_intrinsics
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
+    
+    picam2.start(config, show_preview=True)
+
+    # Register the callback to parse and draw classification results
+    picam2.pre_callback = parse_and_draw_classification_results
+
+    while True:
+        time.sleep(0.5)  # Adjust sleep time as needed
