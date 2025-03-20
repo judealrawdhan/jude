@@ -24,6 +24,9 @@ GPIO.output(RED_LIGHT, GPIO.HIGH)
 GPIO.output(YELLOW_LIGHT, GPIO.LOW)
 GPIO.output(GREEN_LIGHT, GPIO.LOW)
 
+# Initialize global variable for labels
+LABELS = None
+
 # Function to control the traffic light
 def set_traffic_light(color):
     GPIO.output(RED_LIGHT, GPIO.LOW)
@@ -93,6 +96,7 @@ def get_label(request: CompletedRequest, idx: int) -> str:
     """Retrieve the label corresponding to the classification index."""
     global LABELS
     if LABELS is None:
+        # Ensure LABELS is initialized
         LABELS = intrinsics.labels
         assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
         output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
