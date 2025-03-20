@@ -1,0 +1,153 @@
+import argparse
+import sys
+import time
+import RPi.GPIO as GPIO
+import numpy as np
+import cv2
+from picamera2 import CompletedRequest, MappedArray, Picamera2
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection, softmax
+
+# GPIO Setup for Traffic Lights
+RED_LIGHT = 17
+YELLOW_LIGHT = 27
+GREEN_LIGHT = 22
+
+# Setup GPIO pins for the traffic light
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RED_LIGHT, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT, GPIO.OUT)
+
+# Initially, set to red
+GPIO.output(RED_LIGHT, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+GPIO.output(GREEN_LIGHT, GPIO.LOW)
+
+def set_traffic_light(color):
+    """Control the traffic light based on the color."""
+    GPIO.output(RED_LIGHT, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT, GPIO.LOW)
+
+    if color == "red":
+        GPIO.output(RED_LIGHT, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
+
+def turn_green_light():
+    """Turn the green light on for 5 seconds, then yellow for 2 seconds."""
+    print("🚦 Turning green light ON!")
+    set_traffic_light("green")
+    time.sleep(5)
+
+    print("🟡 Switching to yellow!")
+    set_traffic_light("yellow")
+    time.sleep(2)
+
+    print("🔴 Turning red light ON!")
+    set_traffic_light("red")
+
+last_detections = []
+LABELS = None
+
+class Classification:
+    def __init__(self, idx: int, score: float):
+        """Create a Classification object, recording the idx and score."""
+        self.idx = idx
+        self.score = score
+
+def get_label(request: CompletedRequest, idx: int) -> str:
+    """Retrieve the label corresponding to the classification index."""
+    global LABELS
+    if LABELS is None:
+        LABELS = intrinsics.labels
+        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
+    return LABELS[idx]
+
+def parse_classification_results(request: CompletedRequest):
+    """Parse the output tensor into the classification results above the threshold."""
+    global last_detections
+    np_outputs = imx500.get_outputs(request.get_metadata())
+
+    if np_outputs is None:
+        return last_detections
+
+    np_output = np_outputs[0]
+
+    # Apply softmax to the output
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+
+    top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
+
+    last_detections = [Classification(index, np_output[index]) for index in top_indices]
+
+    # Debugging output for classifications
+    print("Top 3 classifications:")
+    for result in last_detections:
+        label = get_label(request, result.idx)
+        print(f"Class: {label}, Score: {result.score}")
+
+    return last_detections
+
+def control_traffic_light(detected: bool):
+    """Control the traffic light based on ambulance detection."""
+    if detected:
+        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
+        GPIO.output(RED_LIGHT, GPIO.LOW)
+        GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+        print("🚑 Ambulance detected! Turning green light ON.")
+    else:
+        GPIO.output(RED_LIGHT, GPIO.HIGH)
+        GPIO.output(GREEN_LIGHT, GPIO.LOW)
+        GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+        print("🚫 No ambulance detected. Turning red light ON.")
+
+def parse_and_draw_classification_results(request: CompletedRequest):
+    """Analyse and draw the classification results in the output tensor."""
+    results = parse_classification_results(request)
+    ambulance_detected = False
+
+    # Check if "ambulance" is in the top 3 detections
+    for result in results:
+        label = get_label(request, result.idx)
+        print(f"Detected: {label} with score: {result.score}")
+
+        if label == "ambulance" and result.score > 0.5:  # You can adjust the threshold score
+            ambulance_detected = True
+            break  # No need to check further if ambulance is already detected
+
+    # Control the traffic light based on ambulance detection
+    control_traffic_light(ambulance_detected)
+
+def get_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, help="Path of the model", default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    parser.add_argument("--fps", type=int, help="Frames per second")
+    parser.add_argument("-s", "--softmax", action=argparse.BooleanOptionalAction, help="Add post-process softmax")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction, help="Preprocess the image with preserve aspect ratio")
+    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = get_args()
+
+    # Initialize the camera and network
+    imx500 = IMX500(args.model)
+    intrinsics = imx500.network_intrinsics
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
+    
+    picam2.start(config, show_preview=True)
+
+    # Register the callback to parse and draw classification results
+    picam2.pre_callback = parse_and_draw_classification_results
+
+    while True:
+        time.sleep(0.5)  # Adjust sleep time as needed
+
