@@ -80,7 +80,9 @@ def parse_and_draw_classification_results(request: CompletedRequest):
 def parse_classification_results(request: CompletedRequest) -> list:
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
-    np_outputs = imx500.get_outputs(request)  # Use `request` directly here
+    # Directly access the metadata for the CnnOutputTensor
+    metadata = request.get_metadata()
+    np_outputs = metadata.get('CnnOutputTensor', None)  # Access the CnnOutputTensor from the metadata
     if np_outputs is None:
         return last_detections
     np_output = np_outputs[0]
@@ -191,3 +193,5 @@ if __name__ == "__main__":
                 turn_green_light()
             else:
                 print("🚫 No ambulance detected.")
+
+ 
