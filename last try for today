@@ -133,7 +133,7 @@ def main():
     picam2.start(config, show_preview=True)
     
     # Set pre callback to parse classification results
-    picam2.pre_callback = parse_and_draw_classification_results
+    picam2.pre_callback = parse_classification_results
     
     while True:
         time.sleep(0.5)
