@@ -80,7 +80,7 @@ def parse_and_draw_classification_results(request: CompletedRequest):
 def parse_classification_results(request: CompletedRequest) -> list:
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
-    np_outputs = imx500.get_outputs(request.get_metadata())
+    np_outputs = imx500.get_outputs(request)  # Use `request` directly here
     if np_outputs is None:
         return last_detections
     np_output = np_outputs[0]
@@ -177,7 +177,9 @@ if __name__ == "__main__":
     picam2.pre_callback = parse_and_draw_classification_results
 
     while True:
-        last_results = parse_classification_results(picam2.capture_metadata())
+        # Use picam2.capture_metadata() to capture the metadata and request
+        metadata = picam2.capture_metadata()
+        last_results = parse_classification_results(metadata)
 
         # Check if ambulance is detected
         for detection in last_results:
