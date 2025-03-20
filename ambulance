@@ -2,7 +2,7 @@ import argparse
 import sys
 import time
 import RPi.GPIO as GPIO
-import numpy as np  # Add this import for numpy
+import numpy as np  # Ensure numpy is imported
 from picamera2 import CompletedRequest, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
@@ -33,7 +33,13 @@ def get_label(request: CompletedRequest, idx: int) -> str:
     """Retrieve the label corresponding to the classification index."""
     global LABELS
     if LABELS is None:
+        # Load the label file if not already loaded
+        print("Loading labels...")
         LABELS = intrinsics.labels
+        if not LABELS:
+            print("No labels found. Using default labels.")
+            with open("assets/imagenet_labels.txt", "r") as f:
+                LABELS = f.read().splitlines()
     return LABELS[idx]
 
 
@@ -41,14 +47,31 @@ def parse_classification_results(request: CompletedRequest):
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
     np_outputs = imx500.get_outputs(request.get_metadata())
+    
     if np_outputs is None:
+        print("No outputs from the model.")
         return last_detections
+    
     np_output = np_outputs[0]
+    
+    # Apply softmax to the output
     if intrinsics.softmax:
         np_output = softmax(np_output)
+    
+    # Debugging output
+    print(f"Model output (raw scores): {np_output}")
+    
     top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
     top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
+    
     last_detections = [Classification(index, np_output[index]) for index in top_indices]
+    
+    # Debugging output for classifications
+    print("Top 3 classifications:")
+    for result in last_detections:
+        label = get_label(request, result.idx)
+        print(f"Class: {label}, Score: {result.score}")
+    
     return last_detections
 
 
@@ -74,8 +97,11 @@ def parse_and_draw_classification_results(request: CompletedRequest):
     # Check if "ambulance" is in the top 3 detections
     for result in results:
         label = get_label(request, result.idx)
+        print(f"Detected: {label} with score: {result.score}")
+        
         if label == "ambulance" and result.score > 0.5:  # You can adjust the threshold score
             ambulance_detected = True
+            break  # No need to check further if ambulance is already detected
 
     # Control the traffic light based on ambulance detection
     control_traffic_light(ambulance_detected)
@@ -87,7 +113,7 @@ def get_args():
     parser.add_argument("--model", type=str, help="Path of the model", default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
     parser.add_argument("--fps", type=int, help="Frames per second")
     parser.add_argument("-s", "--softmax", action=argparse.BooleanOptionalAction, help="Add post-process softmax")
-    parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction, help="preprocess the image with preserve aspect ratio")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction, help="Preprocess the image with preserve aspect ratio")
     parser.add_argument("--labels", type=str, help="Path to the labels file")
     return parser.parse_args()
 
