@@ -2,11 +2,11 @@ import argparse
 import sys
 import time
 import RPi.GPIO as GPIO
-import numpy as np
+import numpy as np  # Import numpy for softmax
 import cv2
 from picamera2 import CompletedRequest, MappedArray, Picamera2
 from picamera2.devices import IMX500
-from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection, softmax
+from picamera2.devices.imx500 import NetworkIntrinsics, postprocess_nanodet_detection
 
 # GPIO Setup for Traffic Lights
 RED_LIGHT = 17
@@ -67,6 +67,11 @@ def get_label(request: CompletedRequest, idx: int) -> str:
         assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
     return LABELS[idx]
 
+def softmax(x):
+    """Compute softmax values for each sets of scores in x."""
+    e_x = np.exp(x - np.max(x))  # To improve numerical stability
+    return e_x / e_x.sum(axis=-1, keepdims=True)
+
 def parse_classification_results(request: CompletedRequest):
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
@@ -78,8 +83,7 @@ def parse_classification_results(request: CompletedRequest):
     np_output = np_outputs[0]
 
     # Apply softmax to the output
-    if intrinsics.softmax:
-        np_output = softmax(np_output)
+    np_output = softmax(np_output)
 
     top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
     top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
@@ -150,4 +154,3 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(0.5)  # Adjust sleep time as needed
-
