@@ -9,7 +9,7 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-# GPIO Setup for Traffic Lights
+# Simplify GPIO Setup for Traffic Lights
 RED_LIGHT = 17
 YELLOW_LIGHT = 27
 GREEN_LIGHT = 22
