@@ -38,18 +38,19 @@ def set_traffic_light(color):
     elif color == "green":
         GPIO.output(GREEN_LIGHT, GPIO.HIGH)
 
-def turn_green_light():
-    """Turn the green light on for 5 seconds, then yellow for 2 seconds."""
-    print("🚦 Turning green light ON!")
-    set_traffic_light("green")
-    time.sleep(5)
-
-    print("🟡 Switching to yellow!")
-    set_traffic_light("yellow")
-    time.sleep(2)
-
-    print("🔴 Turning red light ON!")
-    set_traffic_light("red")
+def print_ambulance_detection(result):
+    """Print detected ambulance and control traffic light."""
+    print(f"Detected Ambulance with score: {result.score}")
+    if result.score > 0.5:
+        print("🚑 Ambulance detected! Turning green light ON.")
+        set_traffic_light("green")
+        time.sleep(5)  # Keep green light for 5 seconds
+        set_traffic_light("yellow")
+        time.sleep(2)  # Keep yellow light for 2 seconds
+        set_traffic_light("red")
+    else:
+        print("🚫 No ambulance detected. Turning red light ON.")
+        set_traffic_light("red")
 
 last_detections = []
 LABELS = None
@@ -101,23 +102,9 @@ def parse_classification_results(request: CompletedRequest):
 
     return last_detections
 
-def control_traffic_light(detected: bool):
-    """Control the traffic light based on ambulance detection."""
-    if detected:
-        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
-        GPIO.output(RED_LIGHT, GPIO.LOW)
-        GPIO.output(YELLOW_LIGHT, GPIO.LOW)
-        print("🚑 Ambulance detected! Turning green light ON.")
-    else:
-        GPIO.output(RED_LIGHT, GPIO.HIGH)
-        GPIO.output(GREEN_LIGHT, GPIO.LOW)
-        GPIO.output(YELLOW_LIGHT, GPIO.LOW)
-        print("🚫 No ambulance detected. Turning red light ON.")
-
 def parse_and_draw_classification_results(request: CompletedRequest):
     """Analyse and draw the classification results in the output tensor."""
     results = parse_classification_results(request)
-    ambulance_detected = False
 
     # Check if "ambulance" is in the top 3 detections
     for result in results:
@@ -126,15 +113,8 @@ def parse_and_draw_classification_results(request: CompletedRequest):
 
         # Specifically check if the ambulance is detected and score > threshold
         if label == "ambulance" and result.score > 0.5:  # You can adjust the threshold score
-            ambulance_detected = True
-            print(f"🚑 Ambulance detected with score {result.score}")
+            print_ambulance_detection(result)
             break  # No need to check further if ambulance is already detected
-
-    # Control the traffic light based on ambulance detection
-    if ambulance_detected:
-        control_traffic_light(True)
-    else:
-        control_traffic_light(False)
 
 def get_args():
     """Parse command line arguments."""
