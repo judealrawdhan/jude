@@ -1,33 +1,36 @@
 import argparse
 import sys
 import time
-import RPi.GPIO as GPIO
-import numpy as np
+from typing import List
+
 import cv2
+import numpy as np
+
 from picamera2 import CompletedRequest, MappedArray, Picamera2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
+import RPi.GPIO as GPIO
 
-# GPIO pin setup for the traffic light
+
+# Define GPIO pins for traffic light
 RED_LIGHT = 17
 YELLOW_LIGHT = 27
 GREEN_LIGHT = 22
 
-# Initialize the GPIO
+# Setup GPIO
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RED_LIGHT, GPIO.OUT)
 GPIO.setup(YELLOW_LIGHT, GPIO.OUT)
 GPIO.setup(GREEN_LIGHT, GPIO.OUT)
 
-# Default to red light on startup
+# Initialize the traffic light to red
 GPIO.output(RED_LIGHT, GPIO.HIGH)
 GPIO.output(YELLOW_LIGHT, GPIO.LOW)
 GPIO.output(GREEN_LIGHT, GPIO.LOW)
 
 def set_traffic_light(color):
-    """Control the traffic light color based on input"""
-    print(f"DEBUG: Setting traffic light to: {color}")  # Debugging line
+    """Set the traffic light to the specified color."""
     GPIO.output(RED_LIGHT, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT, GPIO.LOW)
     GPIO.output(GREEN_LIGHT, GPIO.LOW)
@@ -40,29 +43,27 @@ def set_traffic_light(color):
         GPIO.output(GREEN_LIGHT, GPIO.HIGH)
 
 def turn_green_light():
-    """Turn the traffic light green for 5 seconds, then yellow, and then red"""
-    print("🚦 Turning green light ON!")
+    """Turn on the green traffic light for a certain time."""
+    print("🚦 Green light ON!")
     set_traffic_light("green")
-    time.sleep(5)  # Green light on for 5 seconds
+    time.sleep(5)  # Keep the green light for 5 seconds
 
-    print("🟡 Switching to yellow light!")
+    print("🟡 Yellow light ON!")
     set_traffic_light("yellow")
-    time.sleep(2)  # Yellow light on for 2 seconds
+    time.sleep(2)  # Keep the yellow light for a brief time
 
-    print("🔴 Switching back to red light!")
+    print("🔴 Red light ON!")
     set_traffic_light("red")
 
-last_detections = []
-LABELS = None
-
+# Class to represent classification results
 class Classification:
     def __init__(self, idx: int, score: float):
         """Create a Classification object, recording the idx and score."""
         self.idx = idx
         self.score = score
 
+# Get the label for a particular classification index
 def get_label(request: CompletedRequest, idx: int) -> str:
-    """Retrieve the label corresponding to the classification index."""
     global LABELS
     if LABELS is None:
         LABELS = intrinsics.labels
@@ -77,33 +78,39 @@ def parse_and_draw_classification_results(request: CompletedRequest):
     results = parse_classification_results(request)
     draw_classification_results(request, results)
 
-def parse_classification_results(request: CompletedRequest) -> list:
+def parse_classification_results(request: CompletedRequest) -> List[Classification]:
     """Parse the output tensor into the classification results above the threshold."""
     global last_detections
-    # Directly access the metadata for the CnnOutputTensor
     metadata = request.get_metadata()
     np_outputs = metadata.get('CnnOutputTensor', None)  # Access the CnnOutputTensor from the metadata
     if np_outputs is None:
         return last_detections
     np_output = np_outputs[0]
-    if intrinsics.softmax:
-        np_output = softmax(np_output)
-    top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
-    top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top 3 indices by their scores
+
+    # Check if np_output has enough elements (more than 3)
+    if np_output.size < 3:
+        print("DEBUG: Less than 3 results found in np_output. Returning available results.")
+        top_indices = np.argpartition(-np_output, np_output.size)  # Get indices for all elements
+    else:
+        top_indices = np.argpartition(-np_output, 3)[:3]  # Get top 3 indices with the highest scores
+
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]  # Sort the top indices by their scores
     last_detections = [Classification(index, np_output[index]) for index in top_indices]
     return last_detections
 
-def draw_classification_results(request: CompletedRequest, results: list, stream: str = "main"):
+def draw_classification_results(request: CompletedRequest, results: List[Classification], stream: str = "main"):
     """Draw the classification results for this request onto the ISP output."""
     with MappedArray(request, stream) as m:
         if intrinsics.preserve_aspect_ratio:
+            # Drawing ROI box
             b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
-            color = (255, 0, 0)  # Red for ROI
+            color = (255, 0, 0)  # red
             cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), (255, 0, 0, 0))
             text_left, text_top = b_x, b_y + 20
         else:
             text_left, text_top = 0, 0
+        # Drawing labels (in the ROI box if it exists)
         for index, result in enumerate(results):
             label = get_label(request, idx=result.idx)
             text = f"{label}: {result.score:.3f}"
@@ -115,13 +122,20 @@ def draw_classification_results(request: CompletedRequest, results: list, stream
 
             # Create a copy of the array to draw the background with opacity
             overlay = m.array.copy()
-            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline),
-                          (255, 255, 255), cv2.FILLED)
+
+            # Draw the background rectangle on the overlay
+            cv2.rectangle(overlay,
+                          (text_x, text_y - text_height),
+                          (text_x + text_width, text_y + baseline),
+                          (255, 255, 255),  # Background color (white)
+                          cv2.FILLED)
+
             alpha = 0.3
             cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
 
             # Draw text on top of the background
-            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            cv2.putText(m.array, text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
 def get_args():
     """Parse command line arguments."""
@@ -174,24 +188,8 @@ if __name__ == "__main__":
     picam2.start(config, show_preview=True)
     if intrinsics.preserve_aspect_ratio:
         imx500.set_auto_aspect_ratio()
-
-    last_results = None
+    # Register the callback to parse and draw classification results
     picam2.pre_callback = parse_and_draw_classification_results
 
     while True:
-        # Use picam2.capture_metadata() to capture the metadata and request
-        metadata = picam2.capture_metadata()
-        last_results = parse_classification_results(metadata)
-
-        # Check if ambulance is detected
-        for detection in last_results:
-            label = get_label(picam2, detection.idx)
-            print(f"DEBUG: Detected {label} with score: {detection.score}")
-
-            if "ambulance" in label.lower() and detection.score > 0.5:  # Adjust threshold as needed
-                print("🚑 Ambulance detected! Turning green light ON.")
-                turn_green_light()
-            else:
-                print("🚫 No ambulance detected.")
-
- 
+        time.sleep(0.5)  # Sleep for a brief time to avoid overwhelming the CPU
