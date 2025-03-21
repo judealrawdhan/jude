@@ -1,14 +1,14 @@
-import RPi.GPIO as GPIO
-import time
 import argparse
 import sys
-from picamera2 import Picamera2, MappedArray
+import time
 import numpy as np
+import RPi.GPIO as GPIO
+from picamera2 import Picamera2, MappedArray, CompletedRequest
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-# Define GPIO pins for Traffic Light A and Traffic Light B
+# Traffic Light GPIO Setup for Traffic Light A and B
 RED_LIGHT_A = 17
 YELLOW_LIGHT_A = 27
 GREEN_LIGHT_A = 22
@@ -17,7 +17,6 @@ RED_LIGHT_B = 23
 YELLOW_LIGHT_B = 24
 GREEN_LIGHT_B = 25
 
-# Setup GPIO
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RED_LIGHT_A, GPIO.OUT)
 GPIO.setup(YELLOW_LIGHT_A, GPIO.OUT)
@@ -27,7 +26,7 @@ GPIO.setup(RED_LIGHT_B, GPIO.OUT)
 GPIO.setup(YELLOW_LIGHT_B, GPIO.OUT)
 GPIO.setup(GREEN_LIGHT_B, GPIO.OUT)
 
-# Initialize the traffic light to Red for both
+# Initialize traffic lights to default states (A: red, B: green)
 GPIO.output(RED_LIGHT_A, GPIO.HIGH)
 GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
 GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
@@ -36,6 +35,10 @@ GPIO.output(RED_LIGHT_B, GPIO.LOW)
 GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
 GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
 
+# Initialize global variable for labels
+LABELS = None
+
+# Function to control Traffic Light A
 def set_traffic_light_a(color):
     GPIO.output(RED_LIGHT_A, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
@@ -47,6 +50,7 @@ def set_traffic_light_a(color):
     elif color == "green":
         GPIO.output(GREEN_LIGHT_A, GPIO.HIGH)
 
+# Function to control Traffic Light B
 def set_traffic_light_b(color):
     GPIO.output(RED_LIGHT_B, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
@@ -58,8 +62,9 @@ def set_traffic_light_b(color):
     elif color == "green":
         GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
 
+# Function to handle the normal traffic light cycle
 def normal_traffic_cycle():
-    print("Traffic Light Cycle Starts")
+    print("Starting Normal Traffic Cycle")
     # Traffic Light A Red, Traffic Light B Green
     set_traffic_light_a("red")
     set_traffic_light_b("green")
@@ -83,13 +88,14 @@ def normal_traffic_cycle():
     set_traffic_light_b("red")
     time.sleep(6)
 
+# Function to handle the emergency scenario when ambulance is detected
 def emergency_scenario():
-    print("Emergency Scenario: Ambulance Detected")
+    print("🚑 Emergency Scenario: Ambulance Detected")
     # Traffic Light B Yellow
     set_traffic_light_b("yellow")
     time.sleep(2)
 
-    # Traffic Light B Red, Traffic Light A stays
+    # Traffic Light B Red, Traffic Light A stays the same
     set_traffic_light_b("red")
     time.sleep(2)
 
@@ -98,18 +104,27 @@ def emergency_scenario():
     time.sleep(5)
 
     # Resume Normal Cycle
-    print("Resuming normal cycle...")
+    print("🚦 Resuming normal cycle...")
     normal_traffic_cycle()
 
 # Function to process classification results and detect ambulance
-def parse_classification_results(request):
+def parse_classification_results(request: CompletedRequest):
     np_outputs = request.get_metadata()  # Get metadata directly from the request
     if np_outputs is None:
         return []
 
-    np_output = np_outputs[0]  # Assuming the first output is what we need
+    np_output = np_outputs[0]  # Assuming np_outputs[0] is the classification output
+    
+    # Check if np_output is a numpy array
+    if isinstance(np_output, np.ndarray):
+        if np_output.size < 3:
+            print("Error: np_output is too small")
+            return []
+    else:
+        print(f"Error: np_output is not an array, it's of type {type(np_output)}")
+        return []
 
-    # Apply softmax if necessary
+    # If using softmax
     if intrinsics.softmax:
         np_output = softmax(np_output)
 
@@ -121,31 +136,85 @@ def parse_classification_results(request):
     
     print("Top 3 classifications:", detected_classes)
     
+    # Check if "ambulance" is detected
     if "ambulance" in detected_classes:
         emergency_scenario()
     else:
         normal_traffic_cycle()
 
-def get_label(request, idx):
-    """Retrieve the label corresponding to the classification index."""
+# Function to retrieve labels
+def get_label(request: CompletedRequest, idx: int) -> str:
     global LABELS
     if LABELS is None:
         LABELS = intrinsics.labels
     return LABELS[idx]
 
+# Function to display classification results on the camera preview
+def draw_classification_results(request: CompletedRequest, results: list, stream="main"):
+    with MappedArray(request, stream) as m:
+        if intrinsics.preserve_aspect_ratio:
+            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
+            color = (255, 0, 0)  # red
+            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), (255, 0, 0, 0))
+
+        for index, result in enumerate(results):
+            label, score = result
+            text = f"{label}: {score:.3f}"
+            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = b_x + 5
+            text_y = b_y + 15 + index * 20
+
+            overlay = m.array.copy()
+            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline),
+                          (255, 255, 255), cv2.FILLED)
+            alpha = 0.3
+            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
+            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+# Main execution flow
 def main():
-    # Setup and start camera
-    global picam2
-    imx500 = IMX500("/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
-    intrinsics = imx500.network_intrinsics
-    picam2 = Picamera2(imx500.camera_num)  # Initialize picam2 here
+    # Initialize camera and load model
+    picam2 = Picamera2(imx500.camera_num)
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     picam2.start(config, show_preview=True)
-
+    
+    # Set pre callback to parse classification results
     picam2.pre_callback = parse_classification_results
-
+    
     while True:
-        time.sleep(1)
+        time.sleep(0.5)
+
+# Get arguments from command line
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, help="Path of the model",
+                        default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    parser.add_argument("--fps", type=int, help="Frames per second")
+    parser.add_argument("-s", "--softmax", action="store_true", help="Apply softmax post-processing")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action="store_true", help="Preserve aspect ratio")
+    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    return parser.parse_args()
 
 if __name__ == "__main__":
+    args = get_args()
+
+    # Load the model and setup the camera
+    imx500 = IMX500(args.model)
+    intrinsics = imx500.network_intrinsics
+    if not intrinsics:
+        intrinsics = NetworkIntrinsics()
+    elif intrinsics.task != "classification":
+        print("Network is not a classification task", file=sys.stderr)
+        exit()
+
+    # Override intrinsics from args
+    for key, value in vars(args).items():
+        if key == 'labels' and value is not None:
+            with open(value, 'r') as f:
+                intrinsics.labels = f.read().splitlines()
+
+    intrinsics.update_with_defaults()
+
+    # Start the camera and execute
     main()
