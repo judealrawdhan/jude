@@ -106,7 +106,7 @@ def parse_classification_results(request: CompletedRequest):
     # Check if np_outputs is a dictionary and print its keys
     if isinstance(np_outputs, dict):
         print(f"Keys in np_outputs: {np_outputs.keys()}")
-    
+
     if np_outputs is None:
         return []
 
@@ -114,6 +114,10 @@ def parse_classification_results(request: CompletedRequest):
     # If np_outputs is a dictionary, check what keys exist, and then use the correct one
     if isinstance(np_outputs, dict) and 'CnnOutputTensor' in np_outputs:
         np_output = np_outputs['CnnOutputTensor']  # Replace with the correct key based on the structure
+    elif isinstance(np_outputs, tuple):
+        # Handle if np_outputs is a tuple, print its contents for debugging
+        print(f"np_outputs is a tuple: {np_outputs}")
+        np_output = np_outputs[0]  # Assuming the first element is the desired output
     else:
         print("Error: np_outputs doesn't contain expected output")
         return []
