@@ -137,9 +137,9 @@ def get_label(request, idx):
 
 def main():
     # Setup and start camera
+    global picam2
     imx500 = IMX500("/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
     intrinsics = imx500.network_intrinsics
-    global picam2
     picam2 = Picamera2(imx500.camera_num)  # Initialize picam2 here
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     picam2.start(config, show_preview=True)
