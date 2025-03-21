@@ -1,0 +1,64 @@
+from picamera2 import Picamera2, MappedArray, CompletedRequest
+
+# Initialize Picamera2 and configure it for multiple streams
+picam2 = Picamera2(camera_num=0)
+
+# Create a custom configuration for the camera (adjust to your specific case)
+config = picam2.create_preview_configuration(
+    controls={
+        "FrameRate": 30,  # Adjust frame rate for better processing
+        "ExposureTime": 10000,  # Adjust for proper exposure if needed
+    }, 
+    buffer_count=12  # Buffer count for smoother frames
+)
+
+# Initialize the camera
+picam2.start(config, show_preview=True)
+
+# Camera output function (processes multiple outputs based on different traffic light areas)
+def process_multiple_traffic_lights(request: CompletedRequest):
+    # Fetch outputs from the camera
+    np_outputs = picam2.get_outputs(request.get_metadata())
+
+    if isinstance(np_outputs, list):  # Check if it's a list (multiple outputs)
+        for output in np_outputs:
+            process_traffic_light(output)  # Process each traffic light data independently
+    else:
+        process_traffic_light(np_outputs)  # Single output case
+
+# Process each traffic light based on classification results
+def process_traffic_light(output):
+    if isinstance(output, np.ndarray):
+        # Implement your classification logic for each traffic light
+        top_indices = np.argpartition(-output, 3)[:3]
+        top_indices = top_indices[np.argsort(-output[top_indices])]
+        
+        # Example: You can then set traffic light colors based on detected vehicles
+        for index in top_indices:
+            label = get_label(output, index)  # Fetch the label
+            print(f"Detected: {label} with score: {output[index]}")
+            if "ambulance" in label.lower():
+                print("🚑 Ambulance detected! Switching traffic light to GREEN.")
+                set_traffic_light("green")  # Update traffic light
+            else:
+                print("🚫 No ambulance detected.")
+                set_traffic_light("red")  # Keep red or other actions
+
+# Set traffic light state (for Traffic Light A, Traffic Light B, etc.)
+def set_traffic_light(color):
+    # Set GPIO pins for different traffic light states (red, yellow, green)
+    GPIO.output(RED_LIGHT, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT, GPIO.LOW)
+    
+    if color == "red":
+        GPIO.output(RED_LIGHT, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
+
+# Start processing for multiple traffic light scenarios
+while True:
+    time.sleep(0.5)  # Wait for a while to process
+    picam2.capture(request_metadata=True)
