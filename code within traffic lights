@@ -1,0 +1,150 @@
+import RPi.GPIO as GPIO
+import time
+import argparse
+import sys
+from picamera2 import Picamera2, MappedArray
+import numpy as np
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
+
+# Define GPIO pins for Traffic Light A and Traffic Light B
+RED_LIGHT_A = 17
+YELLOW_LIGHT_A = 27
+GREEN_LIGHT_A = 22
+
+RED_LIGHT_B = 23
+YELLOW_LIGHT_B = 24
+GREEN_LIGHT_B = 25
+
+# Setup GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RED_LIGHT_A, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_A, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_A, GPIO.OUT)
+
+GPIO.setup(RED_LIGHT_B, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_B, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_B, GPIO.OUT)
+
+# Initialize the traffic light to Red for both
+GPIO.output(RED_LIGHT_A, GPIO.HIGH)
+GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
+GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
+
+GPIO.output(RED_LIGHT_B, GPIO.LOW)
+GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
+
+def set_traffic_light_a(color):
+    GPIO.output(RED_LIGHT_A, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
+    if color == "red":
+        GPIO.output(RED_LIGHT_A, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT_A, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT_A, GPIO.HIGH)
+
+def set_traffic_light_b(color):
+    GPIO.output(RED_LIGHT_B, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT_B, GPIO.LOW)
+    if color == "red":
+        GPIO.output(RED_LIGHT_B, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT_B, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
+
+def normal_traffic_cycle():
+    print("Traffic Light Cycle Starts")
+    # Traffic Light A Red, Traffic Light B Green
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+    time.sleep(6)
+
+    # Traffic Light B Yellow
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+    # Traffic Light A Green, Traffic Light B Red
+    set_traffic_light_a("green")
+    set_traffic_light_b("red")
+    time.sleep(4)
+
+    # Traffic Light A Yellow
+    set_traffic_light_a("yellow")
+    time.sleep(3)
+
+    # Traffic Light A Red, Traffic Light B Red
+    set_traffic_light_a("red")
+    set_traffic_light_b("red")
+    time.sleep(6)
+
+def emergency_scenario():
+    print("Emergency Scenario: Ambulance Detected")
+    # Traffic Light B Yellow
+    set_traffic_light_b("yellow")
+    time.sleep(2)
+
+    # Traffic Light B Red, Traffic Light A stays
+    set_traffic_light_b("red")
+    time.sleep(2)
+
+    # Traffic Light A Green for Ambulance
+    set_traffic_light_a("green")
+    time.sleep(5)
+
+    # Resume Normal Cycle
+    print("Resuming normal cycle...")
+    normal_traffic_cycle()
+
+# Function to process classification results and detect ambulance
+def parse_classification_results(request):
+    np_outputs = imx500.get_outputs(request.get_metadata())
+    if np_outputs is None:
+        return []
+
+    np_output = np_outputs[0]
+
+    # Apply softmax if necessary
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+
+    # Get the top 3 classifications
+    top_indices = np.argpartition(-np_output, 3)[:3]
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]
+    
+    detected_classes = [get_label(request, index) for index in top_indices]
+    
+    print("Top 3 classifications:", detected_classes)
+    
+    if "ambulance" in detected_classes:
+        emergency_scenario()
+    else:
+        normal_traffic_cycle()
+
+def get_label(request, idx):
+    """Retrieve the label corresponding to the classification index."""
+    global LABELS
+    if LABELS is None:
+        LABELS = intrinsics.labels
+    return LABELS[idx]
+
+def main():
+    # Setup and start camera
+    imx500 = IMX500("/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    intrinsics = imx500.network_intrinsics
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
+    picam2.start(config, show_preview=True)
+
+    picam2.pre_callback = parse_classification_results
+
+    while True:
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
