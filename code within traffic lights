@@ -8,11 +8,11 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-
-# Traffic Light GPIO Setup for both A and B
+# Traffic Light GPIO Setup for two traffic lights
 RED_LIGHT_A = 17
 YELLOW_LIGHT_A = 27
 GREEN_LIGHT_A = 22
+
 RED_LIGHT_B = 5
 YELLOW_LIGHT_B = 6
 GREEN_LIGHT_B = 13
@@ -21,11 +21,12 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(RED_LIGHT_A, GPIO.OUT)
 GPIO.setup(YELLOW_LIGHT_A, GPIO.OUT)
 GPIO.setup(GREEN_LIGHT_A, GPIO.OUT)
+
 GPIO.setup(RED_LIGHT_B, GPIO.OUT)
 GPIO.setup(YELLOW_LIGHT_B, GPIO.OUT)
 GPIO.setup(GREEN_LIGHT_B, GPIO.OUT)
 
-# Initialize traffic lights to red
+# Initialize traffic light to red for both A and B
 GPIO.output(RED_LIGHT_A, GPIO.HIGH)
 GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
 GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
@@ -37,7 +38,7 @@ GPIO.output(GREEN_LIGHT_B, GPIO.LOW)
 # Initialize global variable for labels
 LABELS = None
 
-# Function to control the traffic light for A
+# Function to control the traffic lights
 def set_traffic_light_A(color):
     GPIO.output(RED_LIGHT_A, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
@@ -50,7 +51,6 @@ def set_traffic_light_A(color):
     elif color == "green":
         GPIO.output(GREEN_LIGHT_A, GPIO.HIGH)
 
-# Function to control the traffic light for B
 def set_traffic_light_B(color):
     GPIO.output(RED_LIGHT_B, GPIO.LOW)
     GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
@@ -63,7 +63,7 @@ def set_traffic_light_B(color):
     elif color == "green":
         GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
 
-# Function to handle classification results and switch traffic lights
+# Function to handle classification results and switch traffic light
 def parse_classification_results(request: CompletedRequest):
     # Fetch the outputs from the model (Ensure it's a numpy array)
     np_outputs = request.get_metadata().get('CnnOutputTensor', None)
@@ -71,21 +71,24 @@ def parse_classification_results(request: CompletedRequest):
     if np_outputs is None:
         print("Error: No outputs received.")
         return []
-    
+
     # Debugging output to check what np_outputs contains
     print(f"np_outputs: {np_outputs}")
     print(f"Type of np_outputs: {type(np_outputs)}")
 
-    # Ensure np_outputs is a numpy array if it is a tuple, we need to extract it properly
+    # Check if np_outputs is a tuple
     if isinstance(np_outputs, tuple):
-        np_outputs = np_outputs[0]  # Assuming the first item in the tuple is the desired output
-        print(f"Extracted np_output from tuple: {np_outputs}")
-    
+        print(f"Extracted np_output from tuple: {np_outputs[0]}")
+        np_outputs = np_outputs[0]  # Extract the first item if it's a tuple
+        
     # Ensure np_output is a numpy array
     if isinstance(np_outputs, np.ndarray):
         if np_outputs.size < 3:
             print("Error: np_output is too small")
             return []
+    elif isinstance(np_outputs, float):  # In case np_outputs is a float
+        print(f"Error: np_output is a float value: {np_outputs}")
+        return []
     else:
         print(f"Error: np_output is not an array, it's of type {type(np_outputs)}")
         return []
