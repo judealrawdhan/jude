@@ -103,13 +103,11 @@ def emergency_scenario():
 
 # Function to process classification results and detect ambulance
 def parse_classification_results(request):
-    global picam2  # Declare picam2 as a global variable to access it in the function
-    
-    np_outputs = picam2.get_outputs(request.get_metadata())  # Using picam2 for accessing camera output
+    np_outputs = request.get_metadata()  # Get metadata directly from the request
     if np_outputs is None:
         return []
 
-    np_output = np_outputs[0]
+    np_output = np_outputs[0]  # Assuming the first output is what we need
 
     # Apply softmax if necessary
     if intrinsics.softmax:
