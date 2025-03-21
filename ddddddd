@@ -1,64 +1,197 @@
+import argparse
+import sys
+import time
+import numpy as np
+import RPi.GPIO as GPIO
 from picamera2 import Picamera2, MappedArray, CompletedRequest
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
 
-# Initialize Picamera2 and configure it for multiple streams
-picam2 = Picamera2(camera_num=0)
 
-# Create a custom configuration for the camera (adjust to your specific case)
-config = picam2.create_preview_configuration(
-    controls={
-        "FrameRate": 30,  # Adjust frame rate for better processing
-        "ExposureTime": 10000,  # Adjust for proper exposure if needed
-    }, 
-    buffer_count=12  # Buffer count for smoother frames
-)
+# Traffic Light GPIO Setup
+RED_LIGHT_A = 17
+YELLOW_LIGHT_A = 27
+GREEN_LIGHT_A = 22
 
-# Initialize the camera
-picam2.start(config, show_preview=True)
+RED_LIGHT_B = 5
+YELLOW_LIGHT_B = 6
+GREEN_LIGHT_B = 13
 
-# Camera output function (processes multiple outputs based on different traffic light areas)
-def process_multiple_traffic_lights(request: CompletedRequest):
-    # Fetch outputs from the camera
-    np_outputs = picam2.get_outputs(request.get_metadata())
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RED_LIGHT_A, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_A, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_A, GPIO.OUT)
+GPIO.setup(RED_LIGHT_B, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_B, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_B, GPIO.OUT)
 
-    if isinstance(np_outputs, list):  # Check if it's a list (multiple outputs)
-        for output in np_outputs:
-            process_traffic_light(output)  # Process each traffic light data independently
-    else:
-        process_traffic_light(np_outputs)  # Single output case
+# Initialize traffic lights to red
+GPIO.output(RED_LIGHT_A, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
+GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
+GPIO.output(RED_LIGHT_B, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
+GPIO.output(GREEN_LIGHT_B, GPIO.LOW)
 
-# Process each traffic light based on classification results
-def process_traffic_light(output):
-    if isinstance(output, np.ndarray):
-        # Implement your classification logic for each traffic light
-        top_indices = np.argpartition(-output, 3)[:3]
-        top_indices = top_indices[np.argsort(-output[top_indices])]
-        
-        # Example: You can then set traffic light colors based on detected vehicles
-        for index in top_indices:
-            label = get_label(output, index)  # Fetch the label
-            print(f"Detected: {label} with score: {output[index]}")
-            if "ambulance" in label.lower():
-                print("🚑 Ambulance detected! Switching traffic light to GREEN.")
-                set_traffic_light("green")  # Update traffic light
-            else:
-                print("🚫 No ambulance detected.")
-                set_traffic_light("red")  # Keep red or other actions
+# Initialize global variable for labels
+LABELS = None
 
-# Set traffic light state (for Traffic Light A, Traffic Light B, etc.)
-def set_traffic_light(color):
-    # Set GPIO pins for different traffic light states (red, yellow, green)
-    GPIO.output(RED_LIGHT, GPIO.LOW)
-    GPIO.output(YELLOW_LIGHT, GPIO.LOW)
-    GPIO.output(GREEN_LIGHT, GPIO.LOW)
-    
+# Function to control the traffic lights
+def set_traffic_light_a(color):
+    GPIO.output(RED_LIGHT_A, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
+
     if color == "red":
-        GPIO.output(RED_LIGHT, GPIO.HIGH)
+        GPIO.output(RED_LIGHT_A, GPIO.HIGH)
     elif color == "yellow":
-        GPIO.output(YELLOW_LIGHT, GPIO.HIGH)
+        GPIO.output(YELLOW_LIGHT_A, GPIO.HIGH)
     elif color == "green":
-        GPIO.output(GREEN_LIGHT, GPIO.HIGH)
+        GPIO.output(GREEN_LIGHT_A, GPIO.HIGH)
 
-# Start processing for multiple traffic light scenarios
-while True:
-    time.sleep(0.5)  # Wait for a while to process
-    picam2.capture(request_metadata=True)
+def set_traffic_light_b(color):
+    GPIO.output(RED_LIGHT_B, GPIO.LOW)
+    GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
+    GPIO.output(GREEN_LIGHT_B, GPIO.LOW)
+
+    if color == "red":
+        GPIO.output(RED_LIGHT_B, GPIO.HIGH)
+    elif color == "yellow":
+        GPIO.output(YELLOW_LIGHT_B, GPIO.HIGH)
+    elif color == "green":
+        GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
+
+# Function to handle classification results and switch traffic light
+def parse_classification_results(request: CompletedRequest):
+    # Fetch the outputs from the model (Ensure it's a numpy array)
+    np_outputs = imx500.get_outputs(request.get_metadata())
+
+    if np_outputs is None:
+        return []
+    
+    np_output = np_outputs[0]  # Assuming np_outputs[0] is the desired classification output
+
+    # If using softmax
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+
+    # Get the top 3 classifications
+    top_indices = np.argpartition(-np_output, 3)[:3]
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]
+    
+    # List of classification results
+    last_detections = []
+    for index in top_indices:
+        label = get_label(request, index)
+        score = np_output[index]
+        last_detections.append((label, score))
+
+    # Check if "ambulance" was detected
+    ambulance_detected = any("ambulance" in label.lower() for label, _ in last_detections)
+
+    if ambulance_detected:
+        # Emergency mode: Ambulance detected at Traffic Light A
+        handle_emergency()
+    else:
+        # Normal cycle: Run traffic lights
+        run_normal_cycle()
+
+    return last_detections
+
+def run_normal_cycle():
+    # Normal traffic light cycle
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+    time.sleep(4)
+
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+    set_traffic_light_a("green")
+    set_traffic_light_b("red")
+    time.sleep(4)
+
+    set_traffic_light_a("yellow")
+    time.sleep(3)
+
+    set_traffic_light_b("green")
+    set_traffic_light_a("red")
+    time.sleep(4)
+
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+def handle_emergency():
+    # Emergency scenario for ambulance at Traffic Light A
+    set_traffic_light_b("yellow")
+    time.sleep(2)
+
+    set_traffic_light_b("red")
+    time.sleep(2)
+
+    set_traffic_light_a("green")
+    time.sleep(4)  # Allow ambulance to pass through
+
+    # Return to normal cycle
+    run_normal_cycle()
+
+# Function to retrieve labels
+def get_label(request: CompletedRequest, idx: int) -> str:
+    """Retrieve the label corresponding to the classification index."""
+    global LABELS
+    if LABELS is None:
+        # Ensure LABELS is initialized
+        LABELS = intrinsics.labels
+        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
+        output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
+        if output_tensor_size == 1000:
+            LABELS = LABELS[1:]  # Ignore the background label if present
+    return LABELS[idx]
+
+# Main execution flow
+def main():
+    # Initialize camera and load model
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
+    picam2.start(config, show_preview=True)
+    
+    # Set pre callback to parse classification results
+    picam2.pre_callback = parse_classification_results
+    
+    while True:
+        time.sleep(0.5)
+
+# Get arguments from command line
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, help="Path of the model",
+                        default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
+    parser.add_argument("--fps", type=int, help="Frames per second")
+    parser.add_argument("-s", "--softmax", action="store_true", help="Apply softmax post-processing")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action="store_true", help="Preserve aspect ratio")
+    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    args = get_args()
+
+    # Load the model and setup the camera
+    imx500 = IMX500(args.model)
+    intrinsics = imx500.network_intrinsics
+    if not intrinsics:
+        intrinsics = NetworkIntrinsics()
+    elif intrinsics.task != "classification":
+        print("Network is not a classification task", file=sys.stderr)
+        exit()
+
+    # Override intrinsics from args
+    for key, value in vars(args).items():
+        if key == 'labels' and value is not None:
+            with open(value, 'r') as f:
+                intrinsics.labels = f.read().splitlines()
+
+    intrinsics.update_with_defaults()
+
+    # Start the camera and execute
+    main()
