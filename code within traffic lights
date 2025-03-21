@@ -103,6 +103,8 @@ def emergency_scenario():
 
 # Function to process classification results and detect ambulance
 def parse_classification_results(request):
+    global picam2  # Declare picam2 as a global variable to access it in the function
+    
     np_outputs = picam2.get_outputs(request.get_metadata())  # Using picam2 for accessing camera output
     if np_outputs is None:
         return []
@@ -137,6 +139,7 @@ def main():
     # Setup and start camera
     imx500 = IMX500("/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
     intrinsics = imx500.network_intrinsics
+    global picam2
     picam2 = Picamera2(imx500.camera_num)  # Initialize picam2 here
     config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     picam2.start(config, show_preview=True)
