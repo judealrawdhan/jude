@@ -8,12 +8,12 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 
-
-# Traffic Light GPIO Setup for both Traffic Lights A and B
+# Traffic Light GPIO Setup for Traffic Light A
 RED_LIGHT_A = 17
 YELLOW_LIGHT_A = 27
 GREEN_LIGHT_A = 22
 
+# Traffic Light GPIO Setup for Traffic Light B
 RED_LIGHT_B = 5
 YELLOW_LIGHT_B = 6
 GREEN_LIGHT_B = 13
@@ -61,6 +61,38 @@ def set_traffic_light_b(color):
         GPIO.output(YELLOW_LIGHT_B, GPIO.HIGH)
     elif color == "green":
         GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
+
+# Function to simulate the normal traffic light cycle
+def normal_cycle():
+    # Traffic Light A: Red (6 seconds)
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+    time.sleep(6)
+
+    # Traffic Light B: Yellow (3 seconds)
+    set_traffic_light_a("red")
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+    # Traffic Light A: Green (4 seconds)
+    set_traffic_light_a("green")
+    set_traffic_light_b("red")
+    time.sleep(4)
+
+    # Traffic Light A: Yellow (3 seconds)
+    set_traffic_light_a("yellow")
+    set_traffic_light_b("red")
+    time.sleep(3)
+
+    # Traffic Light B: Red (6 seconds)
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+    time.sleep(6)
+
+    # Traffic Light B: Yellow (3 seconds)
+    set_traffic_light_a("red")
+    set_traffic_light_b("yellow")
+    time.sleep(3)
 
 # Function to handle classification results and switch traffic light
 def parse_classification_results(request: CompletedRequest):
@@ -128,29 +160,6 @@ def parse_classification_results(request: CompletedRequest):
     
     return last_detections
 
-def normal_cycle():
-    """ Simulate the normal traffic light cycle """
-    # Traffic Light A: Red
-    set_traffic_light_a("red")
-    set_traffic_light_b("green")
-    time.sleep(6)  # Traffic Light A stays red for 6 seconds
-
-    # Traffic Light B: Yellow
-    set_traffic_light_b("yellow")
-    time.sleep(3)  # Traffic Light B stays yellow for 3 seconds
-
-    # Traffic Light A: Green
-    set_traffic_light_a("green")
-    set_traffic_light_b("red")
-    time.sleep(4)  # Traffic Light A stays green for 4 seconds
-
-    # Traffic Light A: Yellow
-    set_traffic_light_a("yellow")
-    time.sleep(3)  # Traffic Light A stays yellow for 3 seconds
-
-    # Repeat the normal cycle
-    normal_cycle()
-
 # Function to retrieve labels
 def get_label(request: CompletedRequest, idx: int) -> str:
     """Retrieve the label corresponding to the classification index."""
@@ -163,31 +172,6 @@ def get_label(request: CompletedRequest, idx: int) -> str:
         if output_tensor_size == 1000:
             LABELS = LABELS[1:]  # Ignore the background label if present
     return LABELS[idx]
-
-# Function to display classification results on the camera preview
-def draw_classification_results(request: CompletedRequest, results: list, stream="main"):
-    """Draw the classification results for this request onto the ISP output."""
-    with MappedArray(request, stream) as m:
-        if intrinsics.preserve_aspect_ratio:
-            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
-            color = (255, 0, 0)  # red
-            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), (255, 0, 0, 0))
-
-        # Drawing labels on the image
-        for index, result in enumerate(results):
-            label, score = result
-            text = f"{label}: {score:.3f}"
-            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            text_x = b_x + 5
-            text_y = b_y + 15 + index * 20
-
-            overlay = m.array.copy()
-            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline),
-                          (255, 255, 255), cv2.FILLED)
-            alpha = 0.3
-            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
-            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
 # Main execution flow
 def main():
@@ -235,4 +219,3 @@ if __name__ == "__main__":
 
     # Start the camera and execute
     main()
-
