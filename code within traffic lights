@@ -76,12 +76,12 @@ def parse_classification_results(request: CompletedRequest):
     print(f"np_outputs: {np_outputs}")
     print(f"Type of np_outputs: {type(np_outputs)}")
 
-    # Check if np_outputs is a tuple
+    # Check if np_outputs is a tuple and extract the first element if so
     if isinstance(np_outputs, tuple):
         print(f"Extracted np_output from tuple: {np_outputs[0]}")
         np_outputs = np_outputs[0]  # Extract the first item if it's a tuple
         
-    # Ensure np_output is a numpy array
+    # Ensure np_output is a numpy array or convert it to one
     if isinstance(np_outputs, np.ndarray):
         if np_outputs.size < 3:
             print("Error: np_output is too small")
