@@ -7,7 +7,7 @@ from picamera2 import Picamera2, MappedArray, CompletedRequest
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
-
+import cv2  # You need to import OpenCV for drawing
 
 # Traffic Light GPIO Setup
 RED_LIGHT_A = 17
@@ -97,6 +97,9 @@ def parse_classification_results(request: CompletedRequest):
         # Normal cycle: Run traffic lights
         run_normal_cycle()
 
+    # Draw the classification results on the preview
+    draw_classification_results(request, last_detections)
+
     return last_detections
 
 def run_normal_cycle():
@@ -148,6 +151,31 @@ def get_label(request: CompletedRequest, idx: int) -> str:
         if output_tensor_size == 1000:
             LABELS = LABELS[1:]  # Ignore the background label if present
     return LABELS[idx]
+
+# Function to display classification results on the camera preview
+def draw_classification_results(request: CompletedRequest, results: list, stream="main"):
+    """Draw the classification results for this request onto the ISP output."""
+    with MappedArray(request, stream) as m:
+        if intrinsics.preserve_aspect_ratio:
+            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
+            color = (255, 0, 0)  # red
+            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), (255, 0, 0, 0))
+
+        # Drawing labels on the image
+        for index, result in enumerate(results):
+            label, score = result
+            text = f"{label}: {score:.3f}"
+            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = b_x + 5
+            text_y = b_y + 15 + index * 20
+
+            overlay = m.array.copy()
+            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline),
+                          (255, 255, 255), cv2.FILLED)
+            alpha = 0.3
+            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
+            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
 # Main execution flow
 def main():
