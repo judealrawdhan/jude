@@ -103,7 +103,7 @@ def emergency_scenario():
 
 # Function to process classification results and detect ambulance
 def parse_classification_results(request):
-    np_outputs = imx500.get_outputs(request.get_metadata())
+    np_outputs = picam2.get_outputs(request.get_metadata())  # Using picam2 for accessing camera output
     if np_outputs is None:
         return []
 
