@@ -91,6 +91,8 @@ def parse_classification_results(request: CompletedRequest, queue):
     # Check if "ambulance" was detected
     ambulance_detected = any("ambulance" in label.lower() for label, _ in last_detections)
 
+    print(f"Ambulance detected: {ambulance_detected}")  # Debug log to ensure detection is true/false
+
     # Send detection status to main process through the queue
     queue.put(ambulance_detected)
 
@@ -135,7 +137,7 @@ def handle_emergency():
     # Traffic Light B turns red
     set_traffic_light_b("red")
 
-    # Hold Traffic Light A for 2 seconds to allow ambulance to pass
+    # Hold Traffic Light A for 2 more seconds to allow ambulance to pass
     time.sleep(2)  # Hold for 2 seconds to allow ambulance
 
     # Traffic Light A turns green for ambulance to pass
@@ -206,10 +208,14 @@ def main():
         if not queue.empty():
             ambulance_detected = queue.get()
             print(f"Ambulance detected: {ambulance_detected}")  # Debug log to check ambulance detection
+
             if ambulance_detected:
-                handle_emergency()
+                print("Triggering emergency sequence for ambulance.")
+                handle_emergency()  # Trigger emergency sequence
             else:
-                run_normal_cycle()
+                print("Running normal cycle.")
+                run_normal_cycle()  # Continue normal traffic cycle
+
         time.sleep(0.5)  # Adjust sleep time if needed to improve responsiveness
 
 # Get arguments from command line
