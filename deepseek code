@@ -9,6 +9,7 @@ from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 import cv2
 import threading
+import multiprocessing
 
 # Traffic Light GPIO Setup
 RED_LIGHT_A = 17
@@ -64,7 +65,7 @@ def set_traffic_light_b(color):
         GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
 
 # Function to handle classification results and switch traffic light
-def parse_classification_results(request: CompletedRequest):
+def parse_classification_results(request: CompletedRequest, queue):
     np_outputs = imx500.get_outputs(request.get_metadata())
 
     if np_outputs is None:
@@ -90,12 +91,8 @@ def parse_classification_results(request: CompletedRequest):
     # Check if "ambulance" was detected
     ambulance_detected = any("ambulance" in label.lower() for label, _ in last_detections)
 
-    if ambulance_detected:
-        print("🚑 Ambulance detected! Initiating emergency sequence.")
-        handle_emergency()
-    else:
-        print("🚫 No ambulance detected. Running normal cycle.")
-        run_normal_cycle()
+    # Send detection status to main process through the queue
+    queue.put(ambulance_detected)
 
     # Draw the classification results on the preview
     draw_classification_results(request, last_detections)
@@ -191,17 +188,27 @@ def start_traffic_light_thread():
 def main():
     print("Starting camera preview...")
     picam2 = Picamera2(imx500.camera_num)
-    config = picam2.create_preview_configuration(controls={"FrameRate": 5}, buffer_count=4)  # Lower FPS and buffer count
+    config = picam2.create_preview_configuration(controls={"FrameRate": 5}, buffer_count=8)  # Lower FPS and buffer count
     picam2.start(config, show_preview=True)
     print("Camera preview started.")
 
     # Start the traffic light control in a background thread
     start_traffic_light_thread()
 
+    # Create a multiprocessing queue to pass ambulance detection status
+    queue = multiprocessing.Queue()
+
     # Set pre callback to parse classification results
-    picam2.pre_callback = parse_classification_results
+    picam2.pre_callback = lambda request: parse_classification_results(request, queue)
 
     while True:
+        # Check the queue for ambulance detection status
+        if not queue.empty():
+            ambulance_detected = queue.get()
+            if ambulance_detected:
+                handle_emergency()
+            else:
+                run_normal_cycle()
         time.sleep(0.5)
 
 # Get arguments from command line
