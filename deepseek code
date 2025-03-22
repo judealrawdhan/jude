@@ -95,7 +95,6 @@ def parse_classification_results(request: CompletedRequest):
         handle_emergency()
     else:
         print("🚫 No ambulance detected. Running normal cycle.")
-        # Resume normal cycle if no ambulance is detected
         run_normal_cycle()
 
     # Draw the classification results on the preview
@@ -144,10 +143,9 @@ def handle_emergency():
 
     # Traffic Light A turns green for ambulance to pass
     set_traffic_light_a("green")
-    time.sleep(10)  # Allow ambulance to pass for 10 seconds
+    time.sleep(4)  # Allow ambulance to pass for 4 seconds
 
     # Resume normal cycle after the ambulance has cleared
-    print("Resuming normal traffic light cycle.")
     run_normal_cycle()
 
 # Function to retrieve labels
@@ -193,13 +191,7 @@ def start_traffic_light_thread():
 def main():
     print("Starting camera preview...")
     picam2 = Picamera2(imx500.camera_num)
-    
-    # Optimize camera configuration
-    config = picam2.create_preview_configuration(
-        main={"size": (640, 480)},  # Lower resolution for better performance
-        controls={"FrameRate": 10},  # Lower frame rate
-        buffer_count=4  # Reduce buffer count
-    )
+    config = picam2.create_preview_configuration(controls={"FrameRate": 10}, buffer_count=8)  # Lower FPS and buffer count
     picam2.start(config, show_preview=True)
     print("Camera preview started.")
 
