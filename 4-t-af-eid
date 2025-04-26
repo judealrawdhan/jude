@@ -1,0 +1,201 @@
+import argparse
+import sys
+import time
+import numpy as np
+import RPi.GPIO as GPIO
+from picamera2 import Picamera2, MappedArray, CompletedRequest
+from picamera2.devices import IMX500
+from picamera2.devices.imx500 import NetworkIntrinsics
+from picamera2.devices.imx500.postprocess import softmax
+import cv2
+import threading
+import multiprocessing
+
+# GPIO Pin setup
+RED_LIGHT_A = 17
+YELLOW_LIGHT_A = 27
+GREEN_LIGHT_A = 22
+
+RED_LIGHT_B = 5
+YELLOW_LIGHT_B = 6
+GREEN_LIGHT_B = 13
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RED_LIGHT_A, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_A, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_A, GPIO.OUT)
+GPIO.setup(RED_LIGHT_B, GPIO.OUT)
+GPIO.setup(YELLOW_LIGHT_B, GPIO.OUT)
+GPIO.setup(GREEN_LIGHT_B, GPIO.OUT)
+
+# Set all lights to Red initially
+GPIO.output(RED_LIGHT_A, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT_A, GPIO.LOW)
+GPIO.output(GREEN_LIGHT_A, GPIO.LOW)
+GPIO.output(RED_LIGHT_B, GPIO.HIGH)
+GPIO.output(YELLOW_LIGHT_B, GPIO.LOW)
+GPIO.output(GREEN_LIGHT_B, GPIO.LOW)
+
+# Global variables
+LABELS = None
+
+# Traffic light control functions
+def set_traffic_light_a(color):
+    GPIO.output(RED_LIGHT_A, color == "red")
+    GPIO.output(YELLOW_LIGHT_A, color == "yellow")
+    GPIO.output(GREEN_LIGHT_A, color == "green")
+    print(f"Traffic Light A: {color}")
+
+def set_traffic_light_b(color):
+    GPIO.output(RED_LIGHT_B, color == "red")
+    GPIO.output(YELLOW_LIGHT_B, color == "yellow")
+    GPIO.output(GREEN_LIGHT_B, color == "green")
+    print(f"Traffic Light B: {color}")
+
+# Normal cycle function
+def run_normal_cycle():
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+    time.sleep(10)
+
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+    set_traffic_light_b("red")
+    set_traffic_light_a("green")
+    time.sleep(10)
+
+    set_traffic_light_a("yellow")
+    time.sleep(3)
+
+# Emergency sequence
+def handle_emergency():
+    print("Emergency detected: Handling traffic light changes...")
+    set_traffic_light_b("yellow")
+    time.sleep(3)
+
+    set_traffic_light_b("red")
+    time.sleep(1)
+
+    set_traffic_light_a("green")
+    time.sleep(10)
+
+    print("Emergency handling done. Waiting before resuming normal cycle...")
+    time.sleep(5)  # Optional wait before resuming normal
+
+# Function to parse classification results
+def parse_classification_results(request: CompletedRequest, queue):
+    np_outputs = imx500.get_outputs(request.get_metadata())
+    if np_outputs is None:
+        return []
+
+    np_output = np_outputs[0]
+    if intrinsics.softmax:
+        np_output = softmax(np_output)
+
+    top_indices = np.argpartition(-np_output, 3)[:3]
+    top_indices = top_indices[np.argsort(-np_output[top_indices])]
+
+    last_detections = []
+    for index in top_indices:
+        label = get_label(request, index)
+        score = np_output[index]
+        last_detections.append((label, score))
+
+    ambulance_detected = any("ambulance" in label.lower() for label, _ in last_detections)
+
+    print(f"Detections: {last_detections}")
+    print(f"Ambulance Detected: {ambulance_detected}")
+
+    queue.put(ambulance_detected)
+
+    draw_classification_results(request, last_detections)
+
+    return last_detections
+
+# Get label name
+def get_label(request: CompletedRequest, idx: int) -> str:
+    global LABELS
+    if LABELS is None:
+        LABELS = intrinsics.labels
+        assert len(LABELS) in [1000, 1001], "Invalid labels count."
+        output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
+        if output_tensor_size == 1000:
+            LABELS = LABELS[1:]
+    return LABELS[idx]
+
+# Draw labels on preview
+def draw_classification_results(request: CompletedRequest, results: list, stream="main"):
+    with MappedArray(request, stream) as m:
+        if intrinsics.preserve_aspect_ratio:
+            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
+            color = (255, 0, 0)
+            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), color, 1)
+
+        for idx, (label, score) in enumerate(results):
+            text = f"{label}: {score:.3f}"
+            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            text_x = b_x + 5
+            text_y = b_y + 15 + idx * 20
+
+            overlay = m.array.copy()
+            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline), (255, 255, 255), cv2.FILLED)
+            alpha = 0.3
+            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
+            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+# Main control
+def main():
+    print("Starting Camera...")
+    picam2 = Picamera2(imx500.camera_num)
+    config = picam2.create_preview_configuration(controls={"FrameRate": 5}, buffer_count=8)
+    picam2.start(config, show_preview=True)
+    print("Camera started.")
+
+    queue = multiprocessing.Queue()
+    picam2.pre_callback = lambda request: parse_classification_results(request, queue)
+
+    emergency_mode = False
+
+    while True:
+        if not queue.empty():
+            ambulance_detected = queue.get()
+
+            if ambulance_detected and not emergency_mode:
+                emergency_mode = True
+                handle_emergency()
+                emergency_mode = False
+            elif not emergency_mode:
+                run_normal_cycle()
+
+        time.sleep(0.5)
+
+# Command line arguments
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk", help="Path to model")
+    parser.add_argument("--fps", type=int, help="Frames per second")
+    parser.add_argument("-s", "--softmax", action="store_true", help="Apply softmax")
+    parser.add_argument("-r", "--preserve-aspect-ratio", action="store_true", help="Preserve aspect ratio")
+    parser.add_argument("--labels", type=str, help="Path to labels file")
+    return parser.parse_args()
+
+# Startup
+if __name__ == "__main__":
+    args = get_args()
+
+    imx500 = IMX500(args.model)
+    intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
+    if intrinsics.task != "classification":
+        print("Model is not classification!", file=sys.stderr)
+        exit()
+
+    for key, value in vars(args).items():
+        if key == 'labels' and value:
+            with open(value, 'r') as f:
+                intrinsics.labels = f.read().splitlines()
+
+    intrinsics.update_with_defaults()
+
+    main()
