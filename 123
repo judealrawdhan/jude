@@ -80,9 +80,8 @@ def get_label(request: CompletedRequest, idx: int) -> str:
     global LABELS
     if LABELS is None:
         LABELS = intrinsics.labels
-        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
         output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
-        if output_tensor_size == 1000:
+        if output_tensor_size == len(LABELS) + 1:
             LABELS = LABELS[1:]
     return LABELS[idx]
 
@@ -111,16 +110,22 @@ def draw_classification_results(request: CompletedRequest, results: list, stream
 def traffic_control_loop():
     global ambulance_detected, in_ambulance_mode, ambulance_cleared_time
 
+    # Initial state: A is red, B is green
+    set_traffic_light_a("red")
+    set_traffic_light_b("green")
+
     while True:
         current_time = time.time()
 
-        if ambulance_detected:
-            if not in_ambulance_mode:
-                print("🚨 Ambulance detected. Giving priority to A.")
-                set_traffic_light_b("red")
-                set_traffic_light_a("green")
-                in_ambulance_mode = True
-                ambulance_cleared_time = None
+        if ambulance_detected and not in_ambulance_mode:
+            print("🚨 Ambulance detected while A is RED and B is GREEN. Initiating switch...")
+            set_traffic_light_b("yellow")
+            time.sleep(3)
+            set_traffic_light_b("red")
+            time.sleep(1)
+            set_traffic_light_a("green")
+            in_ambulance_mode = True
+            ambulance_cleared_time = None
             ambulance_detected = False
             continue
 
@@ -135,15 +140,13 @@ def traffic_control_loop():
                     set_traffic_light_a("green")
                     set_traffic_light_b("red")
                 else:
-                    print("✅ Ambulance passed. Switching to normal mode.")
                     set_traffic_light_a("yellow")
                     time.sleep(3)
                     set_traffic_light_a("red")
                     set_traffic_light_b("green")
-                    time.sleep(13)
                     in_ambulance_mode = False
         else:
-            # Normal Traffic Light Sequence: A green → yellow → red, B green → yellow → red
+            # Normal Traffic Light Sequence
             set_traffic_light_a("green")
             set_traffic_light_b("red")
             time.sleep(13)
@@ -165,7 +168,8 @@ def main():
         controls={"FrameRate": intrinsics.inference_rate},
         buffer_count=12
     )
-    picam2.start(config, show_preview=True)
+    picam2.configure(config)
+    picam2.start(show_preview=True)
     picam2.pre_callback = parse_classification_results
 
     try:
