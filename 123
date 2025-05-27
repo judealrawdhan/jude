@@ -25,7 +25,8 @@ GPIO.setup([RED_LIGHT_A, YELLOW_LIGHT_A, GREEN_LIGHT_A, RED_LIGHT_B, YELLOW_LIGH
 LABELS = None
 ambulance_detected = False
 last_detection_time = 0
-is_extending_green = False
+emergency_active = False
+extend_green_start = None
 
 # Traffic Light Functions
 def set_traffic_light_a(color):
@@ -106,33 +107,59 @@ def draw_classification_results(request: CompletedRequest, results: list, stream
             cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
             cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-# Traffic Control with Ambulance Priority
-def control_traffic():
-    global ambulance_detected, last_detection_time, is_extending_green
+# Main Traffic Control Logic
+def traffic_control_loop():
+    global ambulance_detected, emergency_active, extend_green_start
 
-    current_time = time.time()
-
-    if ambulance_detected:
-        print("🚨 Ambulance detected! Keeping A green.")
-        set_traffic_light_a("green")
-        set_traffic_light_b("red")
-        last_detection_time = current_time
-        is_extending_green = True
-        ambulance_detected = False
-    elif is_extending_green:
-        if current_time - last_detection_time < 13:
-            set_traffic_light_a("green")
-            set_traffic_light_b("red")
-        else:
-            print("✅ Finished 13s grace. Switching to B green.")
-            set_traffic_light_a("red")
-            set_traffic_light_b("green")
-            time.sleep(13)
+    state = "b_green"
+    while True:
+        if ambulance_detected and not emergency_active:
+            print("🚨 Ambulance detected: switching priority to A")
             set_traffic_light_b("yellow")
             time.sleep(3)
             set_traffic_light_b("red")
+            time.sleep(1)
             set_traffic_light_a("green")
-            is_extending_green = False
+            emergency_active = True
+            extend_green_start = None
+            ambulance_detected = False
+
+        elif emergency_active:
+            if time.time() - last_detection_time < 1.5:
+                set_traffic_light_a("green")
+                set_traffic_light_b("red")
+            else:
+                if extend_green_start is None:
+                    extend_green_start = time.time()
+                elif time.time() - extend_green_start < 13:
+                    set_traffic_light_a("green")
+                    set_traffic_light_b("red")
+                else:
+                    print("✅ Ambulance passed: resuming normal traffic with B green")
+                    set_traffic_light_a("red")
+                    set_traffic_light_b("green")
+                    state = "b_green"
+                    emergency_active = False
+
+        else:
+            if state == "b_green":
+                set_traffic_light_b("green")
+                set_traffic_light_a("red")
+                time.sleep(13)
+                set_traffic_light_b("yellow")
+                time.sleep(3)
+                set_traffic_light_b("red")
+                time.sleep(1)
+                state = "a_green"
+            elif state == "a_green":
+                set_traffic_light_a("green")
+                set_traffic_light_b("red")
+                time.sleep(13)
+                set_traffic_light_a("yellow")
+                time.sleep(3)
+                set_traffic_light_a("red")
+                time.sleep(1)
+                state = "b_green"
 
 # Main Loop
 def main():
@@ -145,9 +172,7 @@ def main():
     picam2.pre_callback = parse_classification_results
 
     try:
-        while True:
-            control_traffic()
-            time.sleep(0.1)
+        traffic_control_loop()
     except KeyboardInterrupt:
         print("Shutting down gracefully...")
     finally:
