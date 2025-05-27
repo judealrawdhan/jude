@@ -9,11 +9,10 @@ from picamera2.devices.imx500 import NetworkIntrinsics
 from picamera2.devices.imx500.postprocess import softmax
 import cv2
 
-# GPIO Pin Configuration for Traffic Lights
+# GPIO Pin Configuration
 RED_LIGHT_A = 17
 YELLOW_LIGHT_A = 27
 GREEN_LIGHT_A = 22
-
 RED_LIGHT_B = 5
 YELLOW_LIGHT_B = 6
 GREEN_LIGHT_B = 13
@@ -21,31 +20,21 @@ GREEN_LIGHT_B = 13
 GPIO.setmode(GPIO.BCM)
 GPIO.setup([RED_LIGHT_A, YELLOW_LIGHT_A, GREEN_LIGHT_A, RED_LIGHT_B, YELLOW_LIGHT_B, GREEN_LIGHT_B], GPIO.OUT)
 
-# Global State Variables
+# Global State
 LABELS = None
 ambulance_detected = False
 last_detection_time = 0
-emergency_active = False
-extend_green_start = None
+EMERGENCY_ACTIVE = False
 
-# Traffic Light Functions
-def set_traffic_light_a(color):
-    GPIO.output([RED_LIGHT_A, YELLOW_LIGHT_A, GREEN_LIGHT_A], GPIO.LOW)
-    if color == "red":
-        GPIO.output(RED_LIGHT_A, GPIO.HIGH)
-    elif color == "yellow":
-        GPIO.output(YELLOW_LIGHT_A, GPIO.HIGH)
-    elif color == "green":
-        GPIO.output(GREEN_LIGHT_A, GPIO.HIGH)
+# Traffic Light Control
+def set_light(pin_group, color):
+    for pin in pin_group.values():
+        GPIO.output(pin, GPIO.LOW)
+    if color in pin_group:
+        GPIO.output(pin_group[color], GPIO.HIGH)
 
-def set_traffic_light_b(color):
-    GPIO.output([RED_LIGHT_B, YELLOW_LIGHT_B, GREEN_LIGHT_B], GPIO.LOW)
-    if color == "red":
-        GPIO.output(RED_LIGHT_B, GPIO.HIGH)
-    elif color == "yellow":
-        GPIO.output(YELLOW_LIGHT_B, GPIO.HIGH)
-    elif color == "green":
-        GPIO.output(GREEN_LIGHT_B, GPIO.HIGH)
+light_a = {"red": RED_LIGHT_A, "yellow": YELLOW_LIGHT_A, "green": GREEN_LIGHT_A}
+light_b = {"red": RED_LIGHT_B, "yellow": YELLOW_LIGHT_B, "green": GREEN_LIGHT_B}
 
 # Classification Callback
 def parse_classification_results(request: CompletedRequest):
@@ -53,132 +42,99 @@ def parse_classification_results(request: CompletedRequest):
 
     np_outputs = imx500.get_outputs(request.get_metadata())
     if np_outputs is None:
-        return []
+        return
 
-    np_output = np_outputs[0]
+    np_output = softmax(np_outputs[0]) if intrinsics.softmax else np_outputs[0]
+    top_idx = np.argmax(np_output)
+    label = get_label(request, top_idx)
 
-    if intrinsics.softmax:
-        np_output = softmax(np_output)
-
-    top_indices = np.argpartition(-np_output, 1)[:1]
-    top_indices = top_indices[np.argsort(-np_output[top_indices])]
-
-    last_detections = []
-    for index in top_indices:
-        label = get_label(request, index)
-        score = np_output[index]
-        last_detections.append((label, score))
-
-    if any("ambulance" in label.lower() for label, _ in last_detections):
+    if "ambulance" in label.lower():
         ambulance_detected = True
         last_detection_time = time.time()
 
-    draw_classification_results(request, last_detections)
-    return last_detections
+    draw_classification_results(request, [(label, np_output[top_idx])])
 
 def get_label(request: CompletedRequest, idx: int) -> str:
     global LABELS
     if LABELS is None:
         LABELS = intrinsics.labels
-        assert len(LABELS) in [1000, 1001], "Labels file should contain 1000 or 1001 labels."
-        output_tensor_size = imx500.get_output_shapes(request.get_metadata())[0][0]
-        if output_tensor_size == 1000:
+        if len(LABELS) == 1001:
             LABELS = LABELS[1:]
     return LABELS[idx]
 
-def draw_classification_results(request: CompletedRequest, results: list, stream="main"):
+def draw_classification_results(request: CompletedRequest, results, stream="main"):
     with MappedArray(request, stream) as m:
-        if intrinsics.preserve_aspect_ratio:
-            b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
-            color = (255, 0, 0)
-            cv2.putText(m.array, "ROI", (b_x + 5, b_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            cv2.rectangle(m.array, (b_x, b_y), (b_x + b_w, b_y + b_h), color, 1)
-
         for idx, (label, score) in enumerate(results):
-            text = f"{label}: {score:.3f}"
-            (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            text_x = 5
-            text_y = 20 + idx * 20
+            text = f"{label}: {score:.2f}"
+            cv2.putText(m.array, text, (5, 20 + idx * 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-            overlay = m.array.copy()
-            cv2.rectangle(overlay, (text_x, text_y - text_height), (text_x + text_width, text_y + baseline),
-                          (255, 255, 255), cv2.FILLED)
-            alpha = 0.3
-            cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
-            cv2.putText(m.array, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+# Emergency Handling
+def handle_emergency():
+    print("🚨 Ambulance detected!")
 
-# Main Traffic Control Logic
-def traffic_control_loop():
-    global ambulance_detected, emergency_active, extend_green_start
+    # Lock A green, B red
+    set_light(light_a, "green")
+    set_light(light_b, "red")
 
-    state = "b_green"
-    while True:
-        if ambulance_detected and not emergency_active:
-            print("🚨 Ambulance detected: switching priority to A")
-            set_traffic_light_b("yellow")
-            time.sleep(3)
-            set_traffic_light_b("red")
-            time.sleep(1)
-            set_traffic_light_a("green")
-            emergency_active = True
-            extend_green_start = None
+    # Wait until no ambulance is detected
+    while time.time() - last_detection_time < 2:
+        time.sleep(0.5)
+
+    print("✅ Ambulance gone. Finishing emergency sequence...")
+
+    # Keep A green 13s
+    time.sleep(13)
+    set_light(light_a, "yellow")
+    time.sleep(3)
+    set_light(light_a, "red")
+
+    # B green now
+    set_light(light_b, "green")
+    time.sleep(13)
+    set_light(light_b, "yellow")
+    time.sleep(3)
+    set_light(light_b, "red")
+
+# Normal Traffic Cycle
+def normal_cycle():
+    # A red, B green
+    set_light(light_a, "red")
+    set_light(light_b, "green")
+    wait_with_detection(13)
+
+    set_light(light_b, "yellow")
+    wait_with_detection(3)
+    set_light(light_b, "red")
+
+    # A green
+    set_light(light_a, "green")
+    wait_with_detection(13)
+    set_light(light_a, "yellow")
+    wait_with_detection(3)
+    set_light(light_a, "red")
+
+# Smart wait with interrupt
+def wait_with_detection(duration):
+    global ambulance_detected
+    start = time.time()
+    while time.time() - start < duration:
+        if ambulance_detected:
             ambulance_detected = False
-
-        elif emergency_active:
-            if time.time() - last_detection_time < 1.5:
-                set_traffic_light_a("green")
-                set_traffic_light_b("red")
-            else:
-                if extend_green_start is None:
-                    extend_green_start = time.time()
-                elif time.time() - extend_green_start < 13:
-                    set_traffic_light_a("green")
-                    set_traffic_light_b("red")
-                else:
-                    print("✅ Ambulance passed: resuming normal traffic with B green")
-                    set_traffic_light_a("red")
-                    set_traffic_light_b("green")
-                    state = "b_green"
-                    emergency_active = False
-
-        else:
-            if state == "b_green":
-                set_traffic_light_b("green")
-                set_traffic_light_a("red")
-                time.sleep(13)
-                set_traffic_light_b("yellow")
-                time.sleep(3)
-                set_traffic_light_b("red")
-                time.sleep(1)
-                state = "a_green"
-            elif state == "a_green":
-                set_traffic_light_a("green")
-                set_traffic_light_b("red")
-                time.sleep(13)
-                set_traffic_light_a("yellow")
-                time.sleep(3)
-                set_traffic_light_a("red")
-                time.sleep(1)
-                state = "b_green"
+            handle_emergency()
+            break
+        time.sleep(0.1)
 
 # Main Loop
 def main():
     picam2 = Picamera2(imx500.camera_num)
-    config = picam2.create_preview_configuration(
-        controls={"FrameRate": intrinsics.inference_rate},
-        buffer_count=12
-    )
+    config = picam2.create_preview_configuration(controls={"FrameRate": intrinsics.inference_rate}, buffer_count=12)
     picam2.start(config, show_preview=True)
     picam2.pre_callback = parse_classification_results
 
-    try:
-        traffic_control_loop()
-    except KeyboardInterrupt:
-        print("Shutting down gracefully...")
-    finally:
-        GPIO.cleanup()
+    while True:
+        normal_cycle()
 
-# CLI Argument Parsing
+# CLI
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="/usr/share/imx500-models/imx500_network_mobilenet_v2.rpk")
@@ -188,20 +144,25 @@ def get_args():
     parser.add_argument("--labels", type=str)
     return parser.parse_args()
 
-# Run Main
+# Startup
 if __name__ == "__main__":
     args = get_args()
-
     imx500 = IMX500(args.model)
     intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
+
     if intrinsics.task != "classification":
-        print("Network is not a classification task", file=sys.stderr)
-        sys.exit()
+        print("Model must be classification.", file=sys.stderr)
+        sys.exit(1)
 
     if args.labels:
-        with open(args.labels, 'r') as f:
+        with open(args.labels) as f:
             intrinsics.labels = f.read().splitlines()
 
     intrinsics.update_with_defaults()
 
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Exiting...")
+    finally:
+        GPIO.cleanup()
